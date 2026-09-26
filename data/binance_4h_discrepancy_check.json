@@ -1,0 +1,19 @@
+{
+  "source": "Binance public USD-M REST",
+  "retrieved_at_utc": "2026-09-24T11:13:36.8673101Z",
+  "url": "https://fapi.binance.com/fapi/v1/klines?symbol=BTCUSDT&interval=4h&startTime=1736856000000&endTime=1736870399999&limit=1",
+  "response": [
+    1736856000000,
+    "96508.30",
+    "97250.00",
+    "95715.80",
+    "96416.70",
+    "59887.331",
+    1736870399999,
+    "5780092127.47210",
+    1114660,
+    "29963.170",
+    "2892510648.92920",
+    "0"
+  ]
+}

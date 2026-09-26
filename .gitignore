@@ -1,0 +1,52 @@
+# Local Python environment and caches
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Credentials, account state and personal trading records
+.env
+.env.*
+!.env.example
+private_state/
+records/
+*.dpapi
+*.sqlite
+*.sqlite3
+*.sqlite-*
+*.sqlite3-*
+*.db
+*.db-*
+*.pem
+*.key
+*.pfx
+*.p12
+*.xlsx
+*.xls
+*.log
+
+# Generated executables, backups, reports and upload bundles
+*.exe
+*.dll
+*.pdb
+*.bak
+*.tmp
+*.zip
+*.7z
+.ui-update/
+reports/
+build/
+dist/
+
+# Local editor and OS files
+.vs/
+.vscode/
+.idea/
+Thumbs.db
+Desktop.ini
+.DS_Store

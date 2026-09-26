@@ -1,0 +1,76 @@
+{
+  "schema": "available_margin_portfolio_v1",
+  "orders_enabled": false,
+  "initial_equity": 1000,
+  "sizing_basis": "available_margin",
+  "margin_fraction": 0.1,
+  "margin_mode": "isolated",
+  "leverage_by_symbol": {
+    "BTCUSDT": 10,
+    "XRPUSDT": 5,
+    "SOLUSDT": 5
+  },
+  "entry_priority": [
+    "BTCUSDT",
+    "XRPUSDT",
+    "SOLUSDT"
+  ],
+  "reserved_order_margin": 0,
+  "taker_fee": 0.0005,
+  "slippage": 0.0002,
+  "cap_notional": 50000,
+  "maintenance_margin_rate": 0.01,
+  "daily_loss_limit": 0.03,
+  "timeframe": "4h",
+  "entry_parameters": {
+    "family": "supertrend",
+    "period": 12,
+    "multiplier": 3.0,
+    "filter": "range",
+    "direction": "both",
+    "atr_period": 21,
+    "warmup": 450
+  },
+  "exit_parameters": {
+    "stop_atr": 3.5,
+    "take_profit_r": 8.0,
+    "max_hold_bars": 192,
+    "management": "fixed"
+  },
+  "symbol_overrides": {
+    "XRPUSDT": {
+      "entry_parameters": {
+        "family": "supertrend",
+        "period": 17,
+        "multiplier": 1.8,
+        "filter": "open",
+        "direction": "both",
+        "atr_period": 21,
+        "warmup": 450
+      },
+      "exit_parameters": {
+        "stop_atr": 3.5,
+        "take_profit_r": 8.0,
+        "max_hold_bars": 192,
+        "management": "fixed"
+      }
+    },
+    "SOLUSDT": {
+      "entry_parameters": {
+        "family": "ema_reclaim",
+        "period": 48,
+        "mode": "cross",
+        "filter": "fast",
+        "direction": "both",
+        "atr_period": 21,
+        "warmup": 450
+      },
+      "exit_parameters": {
+        "stop_atr": 2.5,
+        "take_profit_r": 6.0,
+        "max_hold_bars": 192,
+        "management": "fixed"
+      }
+    }
+  }
+}

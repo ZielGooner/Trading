@@ -1,0 +1,19 @@
+{
+  "source": "Binance public USD-M REST",
+  "url": "https://fapi.binance.com/fapi/v1/klines?symbol=XRPUSDT&interval=4h&startTime=1730145600000&endTime=1730159999999&limit=1",
+  "retrieved_at_utc": "2026-09-24T12:42:01.747438+00:00",
+  "response": [
+    1730145600000,
+    "0.5172",
+    "0.5213",
+    "0.5160",
+    "0.5192",
+    "47601826.7",
+    1730159999999,
+    "24723633.36644",
+    57230,
+    "25341087.0",
+    "13162892.33185",
+    "0"
+  ]
+}

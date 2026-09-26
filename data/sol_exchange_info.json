@@ -1,0 +1,105 @@
+{
+  "source": "Binance public USD-M REST",
+  "retrieved_at_utc": "2026-09-24T13:18:47.468434+00:00",
+  "server": {
+    "serverTime": 1790255927098
+  },
+  "symbols": {
+    "SOLUSDT": {
+      "symbol": "SOLUSDT",
+      "pair": "SOLUSDT",
+      "contractType": "PERPETUAL",
+      "deliveryDate": 4133404800000,
+      "onboardDate": 1600066800000,
+      "status": "TRADING",
+      "maintMarginPercent": "2.5000",
+      "requiredMarginPercent": "5.0000",
+      "baseAsset": "SOL",
+      "quoteAsset": "USDT",
+      "marginAsset": "USDT",
+      "pricePrecision": 4,
+      "quantityPrecision": 2,
+      "baseAssetPrecision": 8,
+      "quotePrecision": 8,
+      "underlyingType": "COIN",
+      "underlyingSubType": [
+        "Layer-1",
+        "Crypto"
+      ],
+      "triggerProtect": "0.0500",
+      "liquidationFee": "0.015000",
+      "marketTakeBound": "0.05",
+      "maxMoveOrderLimit": 10000,
+      "filters": [
+        {
+          "filterType": "PRICE_FILTER",
+          "tickSize": "0.0100",
+          "minPrice": "0.4200",
+          "maxPrice": "6857"
+        },
+        {
+          "stepSize": "0.01",
+          "maxQty": "1000000",
+          "filterType": "LOT_SIZE",
+          "minQty": "0.01"
+        },
+        {
+          "minQty": "0.01",
+          "maxQty": "80000",
+          "filterType": "MARKET_LOT_SIZE",
+          "stepSize": "0.01"
+        },
+        {
+          "filterType": "MAX_NUM_ORDERS",
+          "limit": 200
+        },
+        {
+          "filterType": "MIN_NOTIONAL",
+          "notional": "5"
+        },
+        {
+          "multiplierUp": "1.0500",
+          "multiplierDown": "0.9500",
+          "multiplierDecimal": "4",
+          "filterType": "PERCENT_PRICE"
+        },
+        {
+          "filterType": "POSITION_RISK_CONTROL",
+          "positionControlSide": "NONE"
+        }
+      ],
+      "orderTypes": [
+        "LIMIT",
+        "MARKET",
+        "STOP",
+        "STOP_MARKET",
+        "TAKE_PROFIT",
+        "TAKE_PROFIT_MARKET",
+        "TRAILING_STOP_MARKET"
+      ],
+      "timeInForce": [
+        "GTC",
+        "IOC",
+        "FOK",
+        "GTX",
+        "GTD"
+      ],
+      "permissionSets": [
+        "GRID",
+        "COPY",
+        "DCA",
+        "PSB"
+      ]
+    }
+  },
+  "requests": [
+    {
+      "url": "https://fapi.binance.com/fapi/v1/time",
+      "sha256": "cd45d0c8c0bb98e4a0d203e460d5feaa273e98ac246d5f1d6d40dd170516bc65"
+    },
+    {
+      "url": "https://fapi.binance.com/fapi/v1/exchangeInfo",
+      "sha256": "5e980e9953498549c6f093584a9494e92f74f933c2c472617449738e8cf4774c"
+    }
+  ]
+}

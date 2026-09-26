@@ -1,0 +1,13 @@
+* text=auto
+*.py text eol=lf
+*.cs text eol=lf
+*.mjs text eol=lf
+*.md text eol=lf
+*.json text eol=lf
+*.ps1 text eol=crlf
+.gitignore text eol=lf
+.gitattributes text eol=lf
+
+# The data audit verifies SHA-256 of the original files. Preserve every byte.
+data/** -text -eol
+tests/reference.json -text -eol

@@ -1,0 +1,486 @@
+{
+  "config": {
+    "schema": "available_margin_portfolio_v1",
+    "orders_enabled": false,
+    "initial_equity": 1000,
+    "sizing_basis": "available_margin",
+    "margin_fraction": 0.1,
+    "margin_mode": "isolated",
+    "leverage_by_symbol": {
+      "BTCUSDT": 10,
+      "XRPUSDT": 5,
+      "SOLUSDT": 5
+    },
+    "entry_priority": [
+      "BTCUSDT",
+      "XRPUSDT",
+      "SOLUSDT"
+    ],
+    "reserved_order_margin": 0,
+    "taker_fee": 0.0005,
+    "slippage": 0.0002,
+    "cap_notional": 50000,
+    "maintenance_margin_rate": 0.01,
+    "daily_loss_limit": 0.03,
+    "timeframe": "4h",
+    "entry_parameters": {
+      "family": "supertrend",
+      "period": 12,
+      "multiplier": 3.0,
+      "filter": "range",
+      "direction": "both",
+      "atr_period": 21,
+      "warmup": 450
+    },
+    "exit_parameters": {
+      "stop_atr": 3.5,
+      "take_profit_r": 8.0,
+      "max_hold_bars": 192,
+      "management": "fixed"
+    },
+    "symbol_overrides": {
+      "XRPUSDT": {
+        "entry_parameters": {
+          "family": "supertrend",
+          "period": 17,
+          "multiplier": 1.8,
+          "filter": "open",
+          "direction": "both",
+          "atr_period": 21,
+          "warmup": 450
+        },
+        "exit_parameters": {
+          "stop_atr": 3.5,
+          "take_profit_r": 8.0,
+          "max_hold_bars": 192,
+          "management": "fixed"
+        }
+      },
+      "SOLUSDT": {
+        "entry_parameters": {
+          "family": "ema_reclaim",
+          "period": 48,
+          "mode": "cross",
+          "filter": "fast",
+          "direction": "both",
+          "atr_period": 21,
+          "warmup": 450
+        },
+        "exit_parameters": {
+          "stop_atr": 2.5,
+          "take_profit_r": 6.0,
+          "max_hold_bars": 192,
+          "management": "fixed"
+        }
+      }
+    }
+  },
+  "start": 1724745600,
+  "end": 1790236800,
+  "signals": {
+    "BTCUSDT": "485e4304e01346bba1dfb2d01dea26ac851ca6cafb19fcbf057167a82d46fe37",
+    "XRPUSDT": "f305e0b4b754e018f59d675d5502ab2ae3b555b106fce872e954941b7ffab6ac",
+    "SOLUSDT": "f6b26d3f34c2119f11e1b0d899f39f3ffcd27f846e0c5ab93b80ea774c862166"
+  },
+  "contexts": {
+    "BTCUSDT": {
+      "source": "2b1f19a688239e8802f1fd44f78574bb972c155211605e85d0df16c80bdfff24",
+      "bars": "69bf2207c119ccda1ebad5b7202e4ad3bf9624496fd1b8e0f1a15e8d30d8f40d",
+      "marks": "c4f0050f432908852ad43df101dd9b91ae320898c90f7f2c46ace9591f15e21c",
+      "funding": "b81fe440676dd05b171d40e6f582ce9f5fe2b29e26392914ffd207cfac5a1e53",
+      "filters": "f49eb7e4417f55f4134e97418412db5d91d3bddd5771977d17f110a79c0696b7",
+      "by_time": "bcb4e781d0886214fe275cf31121383a4cd129307715b4e26de5c184f51faed9",
+      "funding_by_time": "61e3334df3fbb56674277c7ccd1f1144447daca948d8f2008058d9abde4e6a03"
+    },
+    "XRPUSDT": {
+      "source": "751a6ce9a4e10a0e6525c01032ad863670acfb430c412a4618a78d7c1533d262",
+      "bars": "5f66c252b7c3b701e259ba615f5df8601b00dbaac0bb9583d34f0cdd16b79975",
+      "marks": "24b63e162c9852e184ac0f6d239b1a9c6b75f5b7b0037b0711e15f503afd038d",
+      "funding": "872d02391758a01fc9436be21f3545bf7ae4b4f2a83f00dbadb61b1469e62631",
+      "filters": "eff3d92e4b25c35dfe9260f83959ba37b6ff081f2d24b997878f2eebe9d855d1",
+      "by_time": "41353a48d206015f94badfbf2a62739b5d9f8c5d698e11eea369df9ef68b2b2f",
+      "funding_by_time": "7cdb24fb2606d34ff23145165a3f88608a4c16024042c75a495f596c00da1edc"
+    },
+    "SOLUSDT": {
+      "source": "705f06f0200d670c98e49fb48587a64f0981ba7c3b5ce06833fea1bac1d33764",
+      "bars": "ff20e7b862394390a452ce667b1e5abab354741f29957cb03efb5f66093f0414",
+      "marks": "e953c285344bb3db23276ad59f97ed2ec8eabe7819d821832a4da0835d6e6e1a",
+      "funding": "f7b36a8c7ae6815ce3819203ddf0bd24d2d2a721a81daee249db00790aa54fc2",
+      "filters": "9c0c213ace47ad307806b5aaa7b38534fff9836c8d8981f9e045e610adb8c27c",
+      "by_time": "22303e4151bc6ca467d26fed61fe3cec1d3b2878e68345aee54e79c8bcd0d2de",
+      "funding_by_time": "12fae5e0767af9a2d31e8b8642d6be729c0303ce611591218a5d96c2b41dd89d"
+    }
+  },
+  "cases": {
+    "btc_only": {
+      "stats": {
+        "initial_equity": 1000,
+        "ending_equity": 4148.357950414034,
+        "total_return": 3.1483579504140344,
+        "max_drawdown": 0.17929495541596052,
+        "trades": 27,
+        "wins": 17,
+        "win_rate": 0.6296296296296297,
+        "profit_factor": 3.5620720927987324,
+        "fees_paid": 72.09472434009152,
+        "funding_paid": 75.71580126304144,
+        "liquidations": 0,
+        "margin_depletions": 0,
+        "unsafe_stop_entries": 4,
+        "maximum_concurrent_positions": 1,
+        "stop_target_ambiguous_bars": 0,
+        "liquidation_stop_ambiguous_bars": 0,
+        "skipped_entries": {
+          "daily_loss_limit": 1
+        },
+        "execution_days": 51,
+        "arithmetic_execution_day_return": 0.0004384511330532273,
+        "maximum_margin_fraction": 0.09999417180776113,
+        "ledger_reconciliation_error": -1.3642420526593924e-12,
+        "by_symbol": {
+          "BTCUSDT": {
+            "trades": 27,
+            "wins": 17,
+            "win_rate": 0.6296296296296297,
+            "net_pnl": 3148.3579504140357
+          }
+        }
+      },
+      "trades": "187748dcd5450f1a3cc8492eddc58bcb55a866fd5eb0723e4a9085ad946c7aac",
+      "events": "7f1be72391f53e8a1214c69a3b9fec7edf47d18d5e045451f030876918224490",
+      "equity_curve": "39f6825736a7afe37b6f05c2299e37abd85a46767f3d4159c7463673a0c27105",
+      "daily": "e186a5339f488f6637e5aa7a40edee0e857656471406944bf3132a7202e8dbd4"
+    },
+    "btc_xrp": {
+      "stats": {
+        "initial_equity": 1000,
+        "ending_equity": 12598.231661999023,
+        "total_return": 11.598231661999023,
+        "max_drawdown": 0.24304909237808525,
+        "trades": 66,
+        "wins": 35,
+        "win_rate": 0.5303030303030303,
+        "profit_factor": 2.610112475805661,
+        "fees_paid": 280.8463252872222,
+        "funding_paid": 214.50189708607584,
+        "liquidations": 0,
+        "margin_depletions": 0,
+        "unsafe_stop_entries": 10,
+        "maximum_concurrent_positions": 2,
+        "stop_target_ambiguous_bars": 0,
+        "liquidation_stop_ambiguous_bars": 0,
+        "skipped_entries": {
+          "daily_loss_limit": 10,
+          "nonpositive_stop_or_target": 19
+        },
+        "execution_days": 94,
+        "arithmetic_execution_day_return": 0.005906044375539338,
+        "maximum_margin_fraction": 0.0999998141202377,
+        "ledger_reconciliation_error": 5.4569682106375694e-12,
+        "by_symbol": {
+          "BTCUSDT": {
+            "trades": 27,
+            "wins": 17,
+            "win_rate": 0.6296296296296297,
+            "net_pnl": 5992.292302059871
+          },
+          "XRPUSDT": {
+            "trades": 39,
+            "wins": 18,
+            "win_rate": 0.46153846153846156,
+            "net_pnl": 5605.939359939148
+          }
+        }
+      },
+      "trades": "d6253094b96100ec5e4eaa986ed10d5c6323706c46ad5391118bf270e14b6904",
+      "events": "08f53f26b1020dd87961ad7c3a62378cd068a07432112eafae0c43bff020795a",
+      "equity_curve": "9979a4cdaa50a1b0524b99eeb0b8b49c0aa056db72ba3a41565369be1f43d923",
+      "daily": "5e25c92e1f1c6cf780a838784a7530f5289c5b3bda90b9e8cde09208414fb95f"
+    },
+    "cost_stress": {
+      "stats": {
+        "initial_equity": 1000,
+        "ending_equity": 23233.640439057282,
+        "total_return": 22.233640439057282,
+        "max_drawdown": 0.23184393438124906,
+        "trades": 96,
+        "wins": 51,
+        "win_rate": 0.53125,
+        "profit_factor": 2.4479914681792923,
+        "fees_paid": 684.4075107524741,
+        "funding_paid": 335.26808967992827,
+        "liquidations": 0,
+        "margin_depletions": 0,
+        "unsafe_stop_entries": 10,
+        "maximum_concurrent_positions": 3,
+        "stop_target_ambiguous_bars": 0,
+        "liquidation_stop_ambiguous_bars": 0,
+        "skipped_entries": {
+          "daily_loss_limit": 18,
+          "nonpositive_stop_or_target": 16
+        },
+        "execution_days": 139,
+        "arithmetic_execution_day_return": 0.007164866473382812,
+        "maximum_margin_fraction": 0.09999999996197355,
+        "ledger_reconciliation_error": -1.0913936421275139e-11,
+        "by_symbol": {
+          "BTCUSDT": {
+            "trades": 27,
+            "wins": 17,
+            "win_rate": 0.6296296296296297,
+            "net_pnl": 8651.305817657363
+          },
+          "XRPUSDT": {
+            "trades": 41,
+            "wins": 18,
+            "win_rate": 0.43902439024390244,
+            "net_pnl": 7032.687135696478
+          },
+          "SOLUSDT": {
+            "trades": 28,
+            "wins": 16,
+            "win_rate": 0.5714285714285714,
+            "net_pnl": 6549.647485703451
+          }
+        }
+      },
+      "trades": "0bef5681055eda75ce22805ed8cc862dffb8a2c03c704bb81d60c446bb7f18ac",
+      "events": "e15823e37ad78ac7bd1ce9290d76973d2ceb36bf97c0792a8a65350ae1ef9283",
+      "equity_curve": "a65f1f7774dc38b15112903fe6903ed4ae23a20d732999873eb237c31f1da12b",
+      "daily": "319d942a94d93d421ec2eb9087ac00026799ccae9eb45475538c39d215ec3d56"
+    },
+    "data_discrepancy_stress": {
+      "stats": {
+        "initial_equity": 1000,
+        "ending_equity": 23950.253821912574,
+        "total_return": 22.950253821912575,
+        "max_drawdown": 0.229354464748727,
+        "trades": 96,
+        "wins": 51,
+        "win_rate": 0.53125,
+        "profit_factor": 2.4806758824277475,
+        "fees_paid": 581.6499173508419,
+        "funding_paid": 342.2572862320619,
+        "liquidations": 0,
+        "margin_depletions": 0,
+        "unsafe_stop_entries": 10,
+        "maximum_concurrent_positions": 3,
+        "stop_target_ambiguous_bars": 0,
+        "liquidation_stop_ambiguous_bars": 0,
+        "skipped_entries": {
+          "daily_loss_limit": 18,
+          "nonpositive_stop_or_target": 16
+        },
+        "execution_days": 139,
+        "arithmetic_execution_day_return": 0.00738017122172394,
+        "maximum_margin_fraction": 0.09999997130713985,
+        "ledger_reconciliation_error": 0.0,
+        "by_symbol": {
+          "BTCUSDT": {
+            "trades": 27,
+            "wins": 17,
+            "win_rate": 0.6296296296296297,
+            "net_pnl": 8977.54047713081
+          },
+          "XRPUSDT": {
+            "trades": 41,
+            "wins": 18,
+            "win_rate": 0.43902439024390244,
+            "net_pnl": 7247.609235019556
+          },
+          "SOLUSDT": {
+            "trades": 28,
+            "wins": 16,
+            "win_rate": 0.5714285714285714,
+            "net_pnl": 6725.104109762209
+          }
+        }
+      },
+      "trades": "9cc2302ca80b8b51c7de216c2f78fdc7bd7d9baaccd052fd0bf5719674385c86",
+      "events": "7bdbab12780c813a91cc984dbbc9309e17a8419f814579a2f7f39948f058bd0d",
+      "equity_curve": "0bd6550197988e191f262f57499b107723fac0fadeb81043e121f0ce2cc5c716",
+      "daily": "4a577ab1c5ddb8374b66f6bb25a31820b20b41fc039d2e020a629314c4fb61a1"
+    },
+    "portfolio": {
+      "stats": {
+        "initial_equity": 1000,
+        "ending_equity": 23950.253821912574,
+        "total_return": 22.950253821912575,
+        "max_drawdown": 0.229354464748727,
+        "trades": 96,
+        "wins": 51,
+        "win_rate": 0.53125,
+        "profit_factor": 2.4806758824277475,
+        "fees_paid": 581.6499173508419,
+        "funding_paid": 342.2572862320619,
+        "liquidations": 0,
+        "margin_depletions": 0,
+        "unsafe_stop_entries": 10,
+        "maximum_concurrent_positions": 3,
+        "stop_target_ambiguous_bars": 0,
+        "liquidation_stop_ambiguous_bars": 0,
+        "skipped_entries": {
+          "daily_loss_limit": 18,
+          "nonpositive_stop_or_target": 16
+        },
+        "execution_days": 139,
+        "arithmetic_execution_day_return": 0.00738017122172394,
+        "maximum_margin_fraction": 0.09999997130713985,
+        "ledger_reconciliation_error": 0.0,
+        "by_symbol": {
+          "BTCUSDT": {
+            "trades": 27,
+            "wins": 17,
+            "win_rate": 0.6296296296296297,
+            "net_pnl": 8977.54047713081
+          },
+          "XRPUSDT": {
+            "trades": 41,
+            "wins": 18,
+            "win_rate": 0.43902439024390244,
+            "net_pnl": 7247.609235019556
+          },
+          "SOLUSDT": {
+            "trades": 28,
+            "wins": 16,
+            "win_rate": 0.5714285714285714,
+            "net_pnl": 6725.104109762209
+          }
+        }
+      },
+      "trades": "9cc2302ca80b8b51c7de216c2f78fdc7bd7d9baaccd052fd0bf5719674385c86",
+      "events": "7bdbab12780c813a91cc984dbbc9309e17a8419f814579a2f7f39948f058bd0d",
+      "equity_curve": "0bd6550197988e191f262f57499b107723fac0fadeb81043e121f0ce2cc5c716",
+      "daily": "4a577ab1c5ddb8374b66f6bb25a31820b20b41fc039d2e020a629314c4fb61a1"
+    },
+    "reverse_priority": {
+      "stats": {
+        "initial_equity": 1000,
+        "ending_equity": 23950.253821912574,
+        "total_return": 22.950253821912575,
+        "max_drawdown": 0.229354464748727,
+        "trades": 96,
+        "wins": 51,
+        "win_rate": 0.53125,
+        "profit_factor": 2.4806758824277475,
+        "fees_paid": 581.6499173508419,
+        "funding_paid": 342.2572862320619,
+        "liquidations": 0,
+        "margin_depletions": 0,
+        "unsafe_stop_entries": 10,
+        "maximum_concurrent_positions": 3,
+        "stop_target_ambiguous_bars": 0,
+        "liquidation_stop_ambiguous_bars": 0,
+        "skipped_entries": {
+          "daily_loss_limit": 18,
+          "nonpositive_stop_or_target": 16
+        },
+        "execution_days": 139,
+        "arithmetic_execution_day_return": 0.00738017122172394,
+        "maximum_margin_fraction": 0.09999997130713985,
+        "ledger_reconciliation_error": 0.0,
+        "by_symbol": {
+          "BTCUSDT": {
+            "trades": 27,
+            "wins": 17,
+            "win_rate": 0.6296296296296297,
+            "net_pnl": 8977.54047713081
+          },
+          "XRPUSDT": {
+            "trades": 41,
+            "wins": 18,
+            "win_rate": 0.43902439024390244,
+            "net_pnl": 7247.609235019556
+          },
+          "SOLUSDT": {
+            "trades": 28,
+            "wins": 16,
+            "win_rate": 0.5714285714285714,
+            "net_pnl": 6725.104109762209
+          }
+        }
+      },
+      "trades": "9cc2302ca80b8b51c7de216c2f78fdc7bd7d9baaccd052fd0bf5719674385c86",
+      "events": "7bdbab12780c813a91cc984dbbc9309e17a8419f814579a2f7f39948f058bd0d",
+      "equity_curve": "0bd6550197988e191f262f57499b107723fac0fadeb81043e121f0ce2cc5c716",
+      "daily": "4a577ab1c5ddb8374b66f6bb25a31820b20b41fc039d2e020a629314c4fb61a1"
+    },
+    "sol_only": {
+      "stats": {
+        "initial_equity": 1000,
+        "ending_equity": 2843.493987800945,
+        "total_return": 1.843493987800945,
+        "max_drawdown": 0.14001038145065303,
+        "trades": 28,
+        "wins": 16,
+        "win_rate": 0.5714285714285714,
+        "profit_factor": 3.2272597482336254,
+        "fees_paid": 28.780696262295038,
+        "funding_paid": 10.21178897450626,
+        "liquidations": 0,
+        "margin_depletions": 0,
+        "unsafe_stop_entries": 0,
+        "maximum_concurrent_positions": 1,
+        "stop_target_ambiguous_bars": 0,
+        "liquidation_stop_ambiguous_bars": 0,
+        "skipped_entries": {},
+        "execution_days": 52,
+        "arithmetic_execution_day_return": -0.0019093815696121252,
+        "maximum_margin_fraction": 0.09999747007194898,
+        "ledger_reconciliation_error": -4.547473508864641e-13,
+        "by_symbol": {
+          "SOLUSDT": {
+            "trades": 28,
+            "wins": 16,
+            "win_rate": 0.5714285714285714,
+            "net_pnl": 1843.4939878009454
+          }
+        }
+      },
+      "trades": "4531610dd6c68f6d5964df5340239e35a57f8ba9cf3652a8670575f759623118",
+      "events": "57052da30f54e2236aa5ebffa625ec4e55015dde4dc662898661a0e8c7fdc13a",
+      "equity_curve": "ea85c27399cb7c7ec52edff396fac971c09e8b4f1d908d206e1e1b70c71d670a",
+      "daily": "0ced1bda2ce951c85cbec69d9ff8e0a64b7d2a811a60618c009b1cbba67cb804"
+    },
+    "xrp_only": {
+      "stats": {
+        "initial_equity": 1000,
+        "ending_equity": 4101.013011508397,
+        "total_return": 3.101013011508397,
+        "max_drawdown": 0.2359732681622102,
+        "trades": 39,
+        "wins": 18,
+        "win_rate": 0.46153846153846156,
+        "profit_factor": 2.458790032567879,
+        "fees_paid": 56.20732656166268,
+        "funding_paid": 50.67579459992425,
+        "liquidations": 0,
+        "margin_depletions": 0,
+        "unsafe_stop_entries": 6,
+        "maximum_concurrent_positions": 1,
+        "stop_target_ambiguous_bars": 0,
+        "liquidation_stop_ambiguous_bars": 0,
+        "skipped_entries": {
+          "nonpositive_stop_or_target": 21,
+          "daily_loss_limit": 5
+        },
+        "execution_days": 48,
+        "arithmetic_execution_day_return": 0.005087414602815736,
+        "maximum_margin_fraction": 0.09999954083875301,
+        "ledger_reconciliation_error": -9.094947017729282e-13,
+        "by_symbol": {
+          "XRPUSDT": {
+            "trades": 39,
+            "wins": 18,
+            "win_rate": 0.46153846153846156,
+            "net_pnl": 3101.0130115083975
+          }
+        }
+      },
+      "trades": "32340bfabcc6fde2a2f2adc17a744007fc56fe4dd9bb001165c7f5f7f7d5da94",
+      "events": "40d1cadd17a8176103f08438e9d445f6e5733c1aba2f18f395518b22e721adef",
+      "equity_curve": "3adc5d9c6c9f370ab23a487b0db0c2cf9b1076806ed16357ab787d03be12801e",
+      "daily": "e364f53510d5d8ec09d4bea8e112d751d8c41a4b36424bc9c49126ea6b887e2f"
+    }
+  }
+}

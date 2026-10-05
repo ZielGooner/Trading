@@ -22,7 +22,7 @@ class FakeBinance:
         self.synced = time.monotonic()
         self.ms = (1800000000 // INTERVAL * INTERVAL + 10) * 1000
         self.calls, self.held, self.normal, self.algos = [], {}, {}, {}
-        self.leverage = {'BTCUSDT': 10, 'XRPUSDT': 5, 'SOLUSDT': 5}
+        self.leverage = {s: 2 for s in ('BTCUSDT', 'XRPUSDT', 'SOLUSDT', 'HYPEUSDT')}
         self.wallet = Decimal('1000')
         self.fill_ratio = Decimal('1')
         self.timeout_entry = False
@@ -78,6 +78,11 @@ class FakeBinance:
         if path == '/fapi/v1/symbolConfig':
             return [{'symbol': symbol, 'marginType': 'ISOLATED', 'leverage': self.leverage[symbol],
                      'isAutoAddMargin': self.auto_margin, 'maxNotionalValue': '1000000'}]
+        if path == '/fapi/v1/leverage' and method == 'POST':
+            self.leverage[symbol] = int(p['leverage'])
+            return {'symbol': symbol, 'leverage': self.leverage[symbol], 'maxNotionalValue': '1000000'}
+        if path == '/fapi/v1/marginType' and method == 'POST':
+            return {'code': 200}
         if path == '/fapi/v1/commissionRate':
             return {'takerCommissionRate': '0.0005'}
         if path == '/fapi/v1/ticker/bookTicker':
@@ -107,8 +112,9 @@ class FakeBinance:
                     direction = 1 if p['side'] == 'BUY' else -1
                     if q:
                         self.held[symbol] = {'symbol': symbol, 'positionSide': 'BOTH', 'positionAmt': str(direction * q),
-                                             'entryPrice': '100', 'liquidationPrice': '80' if direction == 1 else '120',
+                                             'entryPrice': '100', 'liquidationPrice': '50' if direction == 1 else '150',
                                              'unRealizedProfit': '0'}
+                        self.wallet -= q * Decimal('100') * Decimal('.0005')
                     result = {'status': 'FILLED' if self.fill_ratio == 1 else 'EXPIRED',
                               'executedQty': str(q), 'avgPrice': '100', 'clientOrderId': cid}
                     self.normal[cid] = result
@@ -124,6 +130,7 @@ class FakeBinance:
                     self.held[symbol]['positionAmt'] = str(remaining * (1 if amount > 0 else -1))
                 else:
                     del self.held[symbol]
+                self.wallet -= q * Decimal('100') * Decimal('.0005')
                 result = {'status': 'FILLED', 'executedQty': str(q), 'avgPrice': '100', 'clientOrderId': cid}
                 self.normal[cid] = result
                 return result
@@ -163,50 +170,64 @@ class SizingTests(unittest.TestCase):
         self.filters = {f['filterType']: f for f in FakeBinance().info('BTCUSDT')['filters']}
         self.filters['MIN_NOTIONAL']['notional'] = '50'
 
-    def size(self, available='20', cap='50000', fee='.0005'):
-        return entry_size(available, 10, fee, '100', '100', cap, self.filters)
+    def size(self, available='100', cap='50000', fee='.0005', **limits):
+        return entry_size(available, 2, fee, '100', '100', cap, self.filters, **limits)
 
-    def test_minimum_is_rounded_up_once_and_not_doubled(self):
+    def test_below_minimum_skips_instead_of_raising_the_allocation(self):
         self.filters['MIN_NOTIONAL']['notional'] = '50.00001'
-        result = self.size()
-        self.assertEqual(result['quantity'], Decimal('.501'))
-        self.assertTrue(result['minimum_override'])
-        self.assertLess((result['quantity'] - Decimal('.001')) * 100, Decimal('50.00001'))
+        with self.assertRaises(ValueError):
+            self.size(available='20')
 
     def test_exact_minimum_does_not_add_an_extra_lot(self):
-        self.assertEqual(self.size()['quantity'], Decimal('.5'))
+        self.assertEqual(self.size(available='50')['quantity'], Decimal('.5'))
 
     def test_both_lot_grids_are_satisfied(self):
         self.filters['LOT_SIZE'].update(stepSize='.002', minQty='.002')
         self.filters['MARKET_LOT_SIZE'].update(stepSize='.003', minQty='.003')
         q = self.size()['quantity']
-        self.assertEqual(q, Decimal('.504'))
         self.assertEqual(q % Decimal('.002'), 0)
         self.assertEqual(q % Decimal('.003'), 0)
+        self.assertLessEqual(q * Decimal('50'), Decimal('50'))
+        self.assertGreaterEqual(q * 100, 50)
 
     def test_market_step_disabled_still_honors_market_minimum(self):
         self.filters['MARKET_LOT_SIZE'].update(stepSize='0', minQty='.7')
-        self.assertEqual(self.size()['quantity'], Decimal('.7'))
+        self.assertGreaterEqual(self.size()['quantity'], Decimal('.7'))
+        with self.assertRaises(ValueError):
+            self.size(available='50')
 
     def test_fee_must_fit_and_exact_available_funds_are_allowed(self):
-        with self.assertRaisesRegex(ValueError, '수수료'):
-            self.size(available='5.024999')
-        result = self.size(available='5.025')
-        self.assertEqual(result['estimated_cost'], Decimal('5.025'))
+        with self.assertRaises(ValueError):
+            self.size(available='49.999999')
+        result = self.size(available='50')
+        self.assertEqual(result['estimated_cost'], Decimal('25.025'))
+        self.assertEqual(result['budget'], Decimal('25.025'))
+        self.assertEqual(result['base_budget'], Decimal('25'))
 
     def test_cannot_override_maximum_notional_or_market_quantity(self):
-        with self.assertRaisesRegex(ValueError, '한도'):
+        with self.assertRaises(ValueError):
             self.size(cap='49.99')
         self.filters['MARKET_LOT_SIZE']['maxQty'] = '.499'
-        with self.assertRaisesRegex(ValueError, '한도'):
+        with self.assertRaises(ValueError):
             self.size()
 
-    def test_normal_allocation_stays_within_ten_percent_with_fees(self):
+    def test_half_free_funds_is_margin_and_entry_fee_is_separate(self):
         result = self.size(available='1000')
-        self.assertFalse(result['minimum_override'])
-        self.assertEqual(result['budget'], Decimal('100'))
-        self.assertEqual(result['quantity'], Decimal('9.950'))
-        self.assertLessEqual(result['estimated_cost'], Decimal('100'))
+        self.assertFalse(result.get('minimum_override', False))
+        self.assertEqual(result['base_budget'], Decimal('500'))
+        self.assertEqual(result['budget'], Decimal('500.5'))
+        self.assertEqual(result['quantity'], Decimal('10'))
+        self.assertEqual(result['quantity'] * 100 / 2, Decimal('500'))
+        self.assertEqual(result['estimated_cost'], result['budget'])
+        self.assertLessEqual(result['estimated_cost'], Decimal('1000'))
+        self.assertEqual(result['quantity'] % Decimal('.001'), 0)
+
+    def test_existing_gross_exposure_reduces_new_order_headroom(self):
+        result = self.size(available='1000', equity='1000', gross='1900')
+        self.assertLessEqual(result['quantity'] * 100, 100)
+        self.assertGreaterEqual(result['quantity'] * 100, 50)
+        with self.assertRaises(ValueError):
+            self.size(available='1000', equity='1000', gross='2000')
 
     def test_invalid_or_empty_funds_cannot_place_minimum_order(self):
         for value in ('0', '-1', 'NaN', 'Infinity'):
@@ -227,8 +248,10 @@ class LiveTests(unittest.TestCase):
         self.engine.start()
         return self.client.ms // (INTERVAL * 1000) * INTERVAL
 
-    def signal(self, direction=1):
-        return {'direction': direction, 'stop_distance': 2, 'take_profit_r': 8, 'max_hold_bars': 768}
+    def signal(self, direction=1, **changes):
+        return {'direction': direction, 'stop_distance': 2, 'take_profit_distance': 1,
+                'max_hold_bars': 3, 'flip_exit': True, 'turnover': 100,
+                'strategy_version': 'TV_BASE_4ASSETS_2X_20261005', **changes}
 
     def enter(self, symbol='BTCUSDT', direction=1):
         boundary = self.begin()
@@ -301,18 +324,19 @@ class LiveTests(unittest.TestCase):
         self.enter()
         record = self.engine.state['positions']['BTCUSDT']
         self.assertEqual(record['stop'], '98')
-        self.assertEqual(record['target'], '116')
+        self.assertEqual(record['target'], '101')
         self.assertEqual(len(self.client.algos), 2)
         for algo in self.client.algos.values():
             self.assertTrue(algo['reduceOnly'])
             self.assertEqual(algo['workingType'], 'CONTRACT_PRICE')
-        self.assertLessEqual(decimal(record['quantity']) * 100 / 10, Decimal('100'))
+        self.assertEqual(record['leverage'], 2)
+        self.assertLessEqual(decimal(record['quantity']) * 100 / 2, Decimal('500'))
 
     def test_short_stop_and_target_are_on_correct_sides(self):
         self.enter(direction=-1)
         record = self.engine.state['positions']['BTCUSDT']
         self.assertEqual(record['stop'], '102')
-        self.assertEqual(record['target'], '84')
+        self.assertEqual(record['target'], '99')
         self.assertTrue(all(x['side'] == 'BUY' for x in self.client.algos.values()))
 
     def test_expired_ioc_partial_fill_is_protected(self):
@@ -386,7 +410,7 @@ class LiveTests(unittest.TestCase):
 
     def test_max_hold_exit_is_owned_and_reduce_only(self):
         self.enter()
-        self.client.ms += 769 * 3600 * 1000
+        self.client.ms += 3 * INTERVAL * 1000
         self.engine.reconcile()
         self.assertEqual(self.client.held, {})
         self.finish_flat()
@@ -398,53 +422,28 @@ class LiveTests(unittest.TestCase):
         first = self.engine.state['positions']['BTCUSDT']
         self.engine.enter('XRPUSDT', self.signal(), boundary)
         second = self.engine.state['positions']['XRPUSDT']
-        self.assertEqual(decimal(first['budget']), Decimal('100'))
-        self.assertLess(decimal(second['budget']), Decimal('100'))
-        self.assertLessEqual(decimal(second['quantity']) * 100 / 5, decimal(second['budget']))
+        self.assertEqual(decimal(first['base_budget']), Decimal('500'))
+        self.assertLess(decimal(second['base_budget']), Decimal('500'))
+        self.assertLessEqual(decimal(second['quantity']) * 100 / 2, decimal(second['base_budget']))
 
     def minimum_wallet(self, wallet='20', symbol='BTCUSDT'):
         self.client.wallet = Decimal(wallet)
-        self.engine.state['day'] = None
         self.client.filter_overrides[symbol] = {'MIN_NOTIONAL': {'notional': '50'}}
 
-    def test_minimum_exception_keeps_long_and_short_protected(self):
+    def test_under_minimum_does_not_exceed_half_available_or_submit_orders(self):
         self.minimum_wallet()
-        self.client.filter_overrides['XRPUSDT'] = {'MIN_NOTIONAL': {'notional': '50'}}
-        boundary = self.begin()
-        self.engine.enter('BTCUSDT', self.signal(), boundary)
-        self.engine.enter('XRPUSDT', self.signal(-1), boundary)
-        first = self.engine.state['positions']['BTCUSDT']
-        second = self.engine.state['positions']['XRPUSDT']
-        self.assertEqual(first['requested_quantity'], '0.501')
-        self.assertEqual(second['requested_quantity'], '0.501')
-        self.assertEqual(decimal(first['base_budget']), Decimal('2'))
-        self.assertLess(decimal(second['base_budget']), Decimal('2'))
-        for record in (first, second):
-            self.assertTrue(record['minimum_override'])
-            self.assertEqual(record['phase'], 'open')
-            self.assertGreater(decimal(record['budget']), decimal(record['base_budget']))
-        self.assertEqual(len(self.client.algos), 4)
-        self.assertEqual(len(self.client.held), 2)
-        self.assertFalse(any(c[2].get('type') == 'MARKET' for c in self.writes()))
-        self.assertTrue(any('최소 주문 조건' in e.get('message', '') for e in self.events))
+        self.enter()
+        self.assertEqual(self.writes(), [])
+        self.assertEqual(self.engine.state['positions'], {})
+        self.assertEqual(self.client.algos, {})
 
-    def test_minimum_quantity_alone_can_exceed_ten_percent(self):
+    def test_minimum_quantity_does_not_raise_the_fifty_percent_budget(self):
         self.minimum_wallet(symbol='SOLUSDT')
         self.client.filter_overrides['SOLUSDT'] = {
             'LOT_SIZE': {'minQty': '.700'}, 'MIN_NOTIONAL': {'notional': '5'}}
         self.enter(symbol='SOLUSDT')
-        record = self.engine.state['positions']['SOLUSDT']
-        self.assertEqual(decimal(record['quantity']), Decimal('.700'))
-        self.assertTrue(record['minimum_override'])
-        self.assertEqual(record['leverage'], 5)
-        self.assertEqual(record['phase'], 'open')
-
-    def test_too_little_balance_for_minimum_plus_fee_skips_all_orders(self):
-        self.minimum_wallet('5.02')
-        self.enter()
         self.assertEqual(self.writes(), [])
-        self.assertEqual(self.engine.state['positions'], {})
-        self.assertTrue(any('수수료' in e.get('message', '') for e in self.events))
+        self.assertNotIn('SOLUSDT', self.engine.state['positions'])
 
     def test_minimum_cannot_bypass_configured_notional_cap(self):
         self.minimum_wallet()
@@ -452,49 +451,181 @@ class LiveTests(unittest.TestCase):
         self.enter()
         self.assertEqual(self.writes(), [])
 
-    def test_minimum_exception_survives_restart_without_new_order(self):
-        self.minimum_wallet()
-        self.enter()
-        count = len(self.writes())
-        self.client.authorized = False
-        restored = Engine(self.client, Path(self.directory.name), config=load())
-        restored.connect()
-        self.assertFalse(restored.entries)
-        restored.start()
-        self.assertTrue(restored.state['positions']['BTCUSDT']['minimum_override'])
-        self.assertEqual(restored.state['positions']['BTCUSDT']['phase'], 'open')
-        self.assertEqual(len(self.writes()), count)
-        self.assertEqual(len(self.client.algos), 2)
-
-    def test_partial_fill_of_minimum_is_protected_without_top_up(self):
-        self.minimum_wallet()
+    def test_partial_ioc_fill_is_protected_without_topping_up_to_minimum(self):
+        self.minimum_wallet('100')
         self.client.fill_ratio = Decimal('.4')
         self.enter()
         self.engine.reconcile()
         record = self.engine.state['positions']['BTCUSDT']
         self.assertLess(decimal(record['quantity']) * 100, Decimal('50'))
-        self.assertEqual(len([c for c in self.writes() if c[1] == '/fapi/v1/order']), 1)
+        entries = [c for c in self.writes() if c[1] == '/fapi/v1/order' and c[2].get('type') == 'LIMIT']
+        self.assertEqual(len(entries), 1)
         self.assertEqual(len(self.client.algos), 2)
         for order in self.client.algos.values():
             self.assertEqual(decimal(order['quantity']), decimal(record['quantity']))
 
-    def test_excess_fill_cost_still_closes_minimum_exception(self):
-        self.minimum_wallet()
-        self.enter(direction=-1)
-        self.client.held['BTCUSDT']['entryPrice'] = '101'
-        self.engine.reconcile()
-        self.assertEqual(self.client.held, {})
-        closes = [c for c in self.writes() if c[2].get('type') == 'MARKET']
-        self.assertEqual(len(closes), 1)
-        self.assertEqual(closes[0][2]['reduceOnly'], 'true')
-
-    def test_minimum_filter_is_refreshed_for_each_entry(self):
+    def test_minimum_filter_is_refreshed_and_unaffordable_order_is_skipped(self):
         boundary = self.begin()
         self.client.filter_overrides['BTCUSDT'] = {'MIN_NOTIONAL': {'notional': '1200'}}
         self.engine.enter('BTCUSDT', self.signal(), boundary)
+        self.assertNotIn('BTCUSDT', self.engine.state['positions'])
+        self.assertEqual(self.writes(), [])
+
+    def test_hype_uses_two_times_leverage_and_full_exchange_protection(self):
+        self.enter(symbol='HYPEUSDT')
+        record = self.engine.state['positions']['HYPEUSDT']
+        self.assertEqual(record['leverage'], 2)
+        self.assertEqual(self.client.leverage['HYPEUSDT'], 2)
+        self.assertEqual(len(self.client.algos), 2)
+        self.assertTrue(all(decimal(x['quantity']) == decimal(record['quantity']) for x in self.client.algos.values()))
+
+    def test_exchange_leverage_is_set_only_after_explicit_start(self):
+        self.client.leverage['HYPEUSDT'] = 7
+        self.assertFalse(self.client.authorized)
+        self.assertEqual(self.writes(), [])
+        self.begin()
+        self.assertEqual(self.client.leverage['HYPEUSDT'], 2)
+        changes = [c for c in self.writes() if c[1] == '/fapi/v1/leverage']
+        self.assertEqual(len(changes), 1)
+        self.assertEqual(changes[0][2], {'symbol': 'HYPEUSDT', 'leverage': 2})
+
+    def test_zero_hold_limit_keeps_protection_without_a_time_exit(self):
+        boundary = self.begin()
+        self.engine.enter('HYPEUSDT', self.signal(max_hold_bars=0, flip_exit=False), boundary)
+        before = len(self.writes())
+        self.client.ms += 365 * 86400 * 1000
+        self.engine.reconcile()
+        self.assertIn('HYPEUSDT', self.client.held)
+        self.assertEqual(len(self.writes()), before)
+        self.assertEqual(len(self.client.algos), 2)
+
+    def test_base_never_half_closes_or_changes_initial_bracket_on_profit(self):
+        boundary = self.begin()
+        self.engine.enter('SOLUSDT', self.signal(max_hold_bars=6, flip_exit=False), boundary)
+        protected = copy.deepcopy(self.client.algos)
+        before = len(self.writes())
+        self.client.ms += INTERVAL * 1000
+        next_boundary = boundary + INTERVAL
+        source = copy.deepcopy(self.engine.candles['SOLUSDT'])
+        source.append(dict(t=next_boundary-INTERVAL, o=100, h=105, l=99, c=104, v=1))
+        with patch.object(self.engine, 'bars', return_value=source), patch('trading.live.build', return_value={}):
+            self.engine.tick()
+        self.assertEqual(self.client.algos, protected)
+        self.assertEqual(len(self.writes()), before)
+        self.assertEqual(decimal(self.client.held['SOLUSDT']['positionAmt']), decimal(self.engine.state['positions']['SOLUSDT']['quantity']))
+
+    def test_simultaneous_signals_use_turnover_priority_then_refreshed_funds(self):
+        boundary = self.begin()
+        self.client.ms += INTERVAL * 1000
+        boundary += INTERVAL
+        volumes = {'BTCUSDT': 1, 'XRPUSDT': 2, 'SOLUSDT': 3, 'HYPEUSDT': 4}
+        def candles(symbol):
+            bars = copy.deepcopy(self.engine.candles[symbol])
+            bars.append(dict(t=boundary-INTERVAL, o=100, h=102, l=98, c=100, v=volumes[symbol]))
+            return bars
+        def event(bars, strategy):
+            return {boundary: self.signal(turnover=bars[-1]['v']*bars[-1]['c'])}
+        with patch.object(self.engine, 'bars', side_effect=candles), patch('trading.live.build', side_effect=event):
+            self.engine.tick()
+        entries = [c[2]['symbol'] for c in self.writes() if c[1] == '/fapi/v1/order' and c[2].get('type') == 'LIMIT']
+        self.assertEqual(entries, ['HYPEUSDT', 'SOLUSDT', 'XRPUSDT', 'BTCUSDT'])
+        budgets = [decimal(self.engine.state['positions'][sym]['base_budget']) for sym in entries]
+        self.assertTrue(all(right < left for left, right in zip(budgets, budgets[1:])))
+        self.assertEqual(budgets[0], Decimal('500'))
+
+    def delayed_balance_batch(self, first_fill_ratio, reported_after_first='1000'):
+        boundary = self.begin()
+        self.client.ms += INTERVAL * 1000
+        boundary += INTERVAL
+        volumes = {'BTCUSDT': 1, 'XRPUSDT': 2, 'SOLUSDT': 3, 'HYPEUSDT': 4}
+        original_call = self.client.call
+
+        def delayed_call(method, path, params=None):
+            params = params or {}
+            if path == '/fapi/v1/order' and method == 'POST' and params.get('type') == 'LIMIT':
+                self.client.fill_ratio = decimal(first_fill_ratio) if params['symbol'] == 'HYPEUSDT' else Decimal(1)
+            result = original_call(method, path, params)
+            # Position/order visibility is current while the balance endpoint lags.
+            if path == '/fapi/v3/account' and self.client.normal:
+                result['assets'][0]['availableBalance'] = str(reported_after_first)
+            return result
+
+        def candles(symbol):
+            bars = copy.deepcopy(self.engine.candles[symbol])
+            bars.append(dict(t=boundary-INTERVAL, o=100, h=102, l=98, c=100, v=volumes[symbol]))
+            return bars
+
+        def event(bars, strategy):
+            return {boundary: self.signal(turnover=bars[-1]['v']*bars[-1]['c'])} if bars[-1]['v'] >= 3 else {}
+
+        with patch.object(self.client, 'call', side_effect=delayed_call), patch.object(self.engine, 'bars', side_effect=candles), patch('trading.live.build', side_effect=event):
+            self.engine.tick()
+        orders = [c[2] for c in self.writes() if c[1] == '/fapi/v1/order' and c[2].get('type') == 'LIMIT']
+        self.assertEqual([o['symbol'] for o in orders], ['HYPEUSDT', 'SOLUSDT'])
+        first_fill = self.client.normal[orders[0]['newClientOrderId']]
+        spent = decimal(first_fill['executedQty']) * decimal(first_fill['avgPrice']) * (Decimal('.5') + Decimal('.0005'))
+        usable = min(Decimal('1000') - spent, decimal(reported_after_first))
+        second = self.engine.state['positions']['SOLUSDT']
+        self.assertEqual(decimal(second['base_budget']), usable / 2)
+        self.assertLessEqual(decimal(second['quantity']) * decimal(second['entry']) / 2, usable / 2)
+        self.assertLessEqual(decimal(second['budget']), usable)
+        return first_fill, second
+
+    def test_late_balance_full_fill_uses_confirmed_cost_for_next_margin(self):
+        first, second = self.delayed_balance_batch('1')
+        self.assertGreater(decimal(first['executedQty']), 0)
+        self.assertLess(decimal(second['base_budget']), Decimal('250'))
+
+    def test_late_balance_partial_ioc_releases_unfilled_reserved_margin(self):
+        first, second = self.delayed_balance_batch('.4')
+        self.assertEqual(first['status'], 'EXPIRED')
+        self.assertGreater(decimal(second['base_budget']), Decimal('399'))
+        self.assertLess(decimal(second['base_budget']), Decimal('401'))
+
+    def test_late_balance_zero_ioc_fill_does_not_consume_batch_funds(self):
+        first, second = self.delayed_balance_batch('0')
+        self.assertEqual(decimal(first['executedQty']), 0)
+        self.assertEqual(decimal(second['base_budget']), Decimal('500'))
+        self.assertNotIn('HYPEUSDT', self.engine.state['positions'])
+
+    def test_batch_uses_exchange_balance_when_lower_than_local_ceiling(self):
+        _, second = self.delayed_balance_batch('1', '350')
+        self.assertEqual(decimal(second['base_budget']), Decimal('175'))
+
+    def test_opposite_signal_closes_full_owned_position_without_same_bar_reversal(self):
+        self.enter()
+        quantity = decimal(self.engine.state['positions']['BTCUSDT']['quantity'])
+        self.client.ms += INTERVAL * 1000
+        boundary = self.client.ms // (INTERVAL * 1000) * INTERVAL
+        with patch('trading.live.build', return_value={boundary: self.signal(-1)}):
+            self.engine.tick()
+        closes = [c[2] for c in self.writes() if c[1] == '/fapi/v1/order' and c[2].get('type') == 'MARKET' and c[2]['symbol']=='BTCUSDT']
+        self.assertEqual(len(closes), 1)
+        self.assertEqual(decimal(closes[0]['quantity']), quantity)
+        btc_entries = [c for c in self.writes() if c[1] == '/fapi/v1/order' and c[2].get('type')=='LIMIT' and c[2]['symbol']=='BTCUSDT']
+        self.assertEqual(len(btc_entries), 1)
+
+    def test_preexisting_legacy_record_keeps_original_protection_and_deadline(self):
+        boundary = self.begin()
+        self.engine.enter('BTCUSDT', self.signal(), boundary)
         record = self.engine.state['positions']['BTCUSDT']
-        self.assertGreaterEqual(decimal(record['requested_quantity']) * Decimal('99.99'), 1200)
-        self.assertTrue(record['minimum_override'])
+        record.pop('strategy_version', None)
+        record.pop('flip_exit', None)
+        record.update(leverage=10, budget='100', quantity='9.9', requested_quantity='9.9', distance='3.5', reward=8,
+                      stop='96.5', target='128', deadline=boundary+768*3600)
+        self.client.leverage['BTCUSDT'] = 10
+        self.client.held['BTCUSDT'].update(positionAmt='9.9', liquidationPrice='90')
+        for order in self.client.algos.values():
+            order['quantity']='9.9';order['triggerPrice']=record['stop'] if order['orderType']=='STOP_MARKET' else record['target']
+        self.engine.save()
+        expected = {k:record[k] for k in ['leverage','stop','target','deadline']}
+        before = len(self.writes())
+        self.client.authorized = False
+        restored = Engine(self.client, Path(self.directory.name), config=load())
+        restored.connect();restored.start()
+        actual = restored.state['positions']['BTCUSDT']
+        self.assertEqual({k:actual[k] for k in expected}, expected)
+        self.assertEqual(len(self.writes()), before)
         self.assertEqual(len(self.client.algos), 2)
 
     def test_single_missing_position_snapshot_does_not_discard_protection(self):
@@ -521,18 +652,9 @@ class LiveTests(unittest.TestCase):
 
     def test_invalid_short_target_is_skipped_before_order(self):
         boundary = self.begin()
-        signal = {**self.signal(-1), 'stop_distance': 13}
+        signal = {**self.signal(-1), 'take_profit_distance': 101}
         self.engine.enter('XRPUSDT', signal, boundary)
         self.assertEqual(self.writes(), [])
-
-    def test_daily_loss_gate_persists_across_restart(self):
-        boundary = self.begin()
-        self.client.wallet = Decimal('960')
-        self.engine.enter('BTCUSDT', self.signal(), boundary)
-        self.assertTrue(self.engine.state['day']['blocked'])
-        self.assertEqual(self.writes(), [])
-        restarted = Engine(FakeBinance(), Path(self.directory.name), config=load())
-        self.assertTrue(restarted.state['day']['blocked'])
 
     def test_foreign_position_and_orders_are_not_touched(self):
         self.client.held['BTCUSDT'] = {'symbol': 'BTCUSDT', 'positionAmt': '1', 'positionSide': 'BOTH',

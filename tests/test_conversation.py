@@ -59,6 +59,17 @@ class ConversationTests(unittest.TestCase):
                 self.ask('질문',first['conversation_id'],7)
         self.assertEqual(call.call_count,1)
 
+    def test_current_four_asset_allocation_replaces_old_fixed_leverage_prompt(self):
+        with patch('trading.conversation.codex_response',return_value={'answer':'설정 확인'}) as call:
+            self.ask()
+        instruction=call.call_args.args[0].split('CONTEXT:\n',1)[0]
+        self.assertIn('가용자금50%',instruction)
+        self.assertIn('전 종목 진입2배',instruction)
+        self.assertIn('USDT 거래대금 근사',instruction)
+        self.assertIn('과거 전략 기록',instruction)
+        self.assertNotIn('BTC 10배',instruction)
+        self.assertNotIn('XRP/SOL 5배',instruction)
+
     def test_failed_or_cancelled_reply_keeps_saved_dialogue(self):
         with patch('trading.conversation.codex_response',return_value={'answer':'ok'}):
             first=self.ask()

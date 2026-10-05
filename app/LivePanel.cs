@@ -119,7 +119,8 @@ namespace TradingLauncher
         public string WalletText { get { return values[0].Text; } }
         public string StatusText { get { return status.Text; } }
 
-        public LivePanel(string projectRoot)
+        public LivePanel(string projectRoot) : this(projectRoot, null) { }
+        public LivePanel(string projectRoot, IChartFeed chartFeed)
         {
             root = projectRoot;
             Dock = DockStyle.Fill;
@@ -192,7 +193,7 @@ namespace TradingLauncher
             market.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
             market.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
             market.RowStyles.Add(new RowStyle(SizeType.Absolute, 190));
-            var chart = new MarketChart(root) { Dock = DockStyle.Fill, Margin = new Padding(0, 0, 0, 8) };
+            var chart = new MarketChart(chartFeed ?? new BinanceChartFeed()) { Dock = DockStyle.Fill, Margin = new Padding(0, 0, 0, 8) };
             market.Controls.Add(chart, 0, 0);
             main.Controls.Add(market, 0, 0);
 
@@ -220,7 +221,7 @@ namespace TradingLauncher
             actions.Controls.Add(start, 0, 3);
             actions.Controls.Add(stop, 1, 3);
             info.Dock = DockStyle.Fill;
-            info.Text = "진입 비중  가용 증거금 10%\n최소 주문 미달 시 필요한 만큼 초과 허용\n레버리지  BTC 10배 / XRP·SOL 5배\n시작 이후 완료되는 4시간봉부터 진입\n같은 종목의 수동 거래는 피하세요.";
+            info.Text = "BTC · XRP · SOL · HYPE\n매 진입마다 남은 가용자금의 50%\n전 종목 레버리지 2배 · TP/SL 사용\n동시 신호는 직전 4시간봉 거래대금 순\n확정 상위봉으로 방향·조건 확인\n최소 주문 미달은 건너뜁니다.\n시작 이후 완료봉부터 진입합니다.";
             info.Font = UiTheme.Font(8F);
             info.ForeColor = UiTheme.Muted;
             info.Margin = new Padding(0, 5, 0, 0);

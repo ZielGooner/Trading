@@ -7,6 +7,8 @@ const [input, output, modules, previewDir] = process.argv.slice(2);
 const require = createRequire(path.join(modules, 'trading-resolver.cjs'));
 const {Workbook, SpreadsheetFile} = await import(pathToFileURL(require.resolve('@oai/artifact-tool')).href);
 const data=JSON.parse(await fs.readFile(input,'utf8'));
+if(!/^[a-f0-9]{12}$/.test(data.current_strategy_version??'') || typeof data.current_strategy_name!=='string')
+  throw new Error('Current strategy version metadata is required for history export');
 const wb=Workbook.create();
 const summary=wb.worksheets.add('요약');
 const trades=wb.worksheets.add('거래내역');
@@ -51,7 +53,7 @@ trades.getRange('N6:N'+n).setNumberFormat('0.00%');
 trades.getRange('O6:O'+n).setNumberFormat('0.00');
 trades.getRange('S6:T'+n).setNumberFormat(money);
 if(tradeRows.length) trades.getRange('M6:M'+n).formulas=data.trades.map((r,i)=>['=IF(P'+(i+6)+'="확인 완료",J'+(i+6)+'-K'+(i+6)+'+L'+(i+6)+',"")']);
-table(fills,'체결 원장','Source: Binance /fapi/v1/userTrades. BTC·XRP·SOL의 프로그램·수동·외부 체결을 모두 보관합니다.',
+table(fills,'체결 원장','Source: Binance /fapi/v1/userTrades. BTC·XRP·SOL·HYPE의 프로그램·수동·외부 체결을 모두 보관합니다.',
  ['종목','체결 ID','주문 ID','체결 시각 (KST)','매수/매도','포지션 모드','체결가','수량','거래대금 (USDT)','실현손익 (USDT)','수수료','수수료 자산','메이커'],data.fills.map(f=>[
  f.symbol,String(f.id),String(f.orderId),excelDate(f.time),f.side,f.positionSide,Number(f.price),Number(f.qty),
  Number(f.quoteQty??Number(f.price)*Number(f.qty)),Number(f.realizedPnl),Number(f.commission),f.commissionAsset,f.maker?'예':'아니오'
@@ -68,16 +70,16 @@ funding.getRange('D6:D'+Math.max(6,data.funding.length+5)).setNumberFormat(money
 
 summary.showGridLines=false;
 summary.tabColor='#263344';
-summary.getRange('A1:G26').format.font={name:'맑은 고딕',size:10,color:'#202630'};
+summary.getRange('A1:G36').format.font={name:'맑은 고딕',size:10,color:'#202630'};
 summary.getRange('A:A').format.columnWidth=29;
 summary.getRange('B:B').format.columnWidth=24;
 summary.getRange('D:G').format.columnWidth=23;
-summary.getRange('A2').values=[['누적 거래 요약']];
+summary.getRange('A2').values=[['거래 요약: 전체 버전과 현재 전략']];
 summary.getRange('A2').format.font={size:15,bold:true};
-summary.getRange('A4:B4').values=[['집계 기준','값']];
+summary.getRange('A4:B4').values=[['전체 버전 누적 통계','값']];
 summary.getRange('A4:B4').format={fill:'#263344',font:{bold:true,color:'#FFFFFF'},rowHeight:28};
 summary.getRange('A5:A14').values=[
- ['확인된 전략 거래 수'],['전략 승률'],['전략 순손익 (USDT)'],['수수료 합계 (USDT)'],['펀딩 합계 (USDT)'],
+ ['전체 버전 확인 거래 수'],['전체 버전 승률'],['전체 버전 순손익 (USDT)'],['수수료 합계 (USDT)'],['펀딩 합계 (USDT)'],
  ['평균 순손익 (USDT)'],['Profit factor'],['미확인 완료 기록 수'],['원시 체결 수'],['엑셀 저장 시각 (KST)']];
 const nets="'거래내역'!M6:M"+n;
 summary.getRange('B5').formulas=[['=COUNT('+nets+')']];
@@ -99,7 +101,7 @@ summary.getRange('D4:G4').format={fill:'#EFF3F7',font:{bold:true}};
 summary.getRange('D5').values=[['거래소 조회 시작: '+(data.meta.sync_start?new Date(data.meta.sync_start).toISOString():'아직 조회하지 않음')]];
 summary.getRange('D6').values=[['마지막 조회 완료: '+(data.meta.sync_end?new Date(data.meta.sync_end).toISOString():'아직 조회하지 않음')]];
 summary.getRange('D8').values=[[data.meta.sync_error?'최근 동기화 실패: 내역이 최신이 아닙니다.':'동기화 범위 안에서 수집한 내역입니다.']];
-summary.getRange('D10').values=[['전략 통계는 프로그램 진입과 연결된 완료 거래만 사용합니다.']];
+summary.getRange('D10').values=[['위 통계는 과거 전략 버전도 포함합니다. 현재 전략은 아래에서 구분합니다.']];
 summary.getRange('D11').values=[['순손익 = 실현손익 - 진입/청산 수수료 + 보유기간 펀딩']];
 summary.getRange('D12').values=[['수수료 환산이나 체결 확인이 필요한 거래는 통계에서 제외합니다.']];
 summary.getRange('D14').values=[['최초 조회는 최근 89일. 이전에 저장한 내역은 계속 보관합니다.']];
@@ -118,17 +120,56 @@ summary.getRange('B19:B22').setNumberFormat(money);
 summary.getRange('D19').values=[['계좌 합계에는 수동·외부·전략 귀속 미확인 거래가 포함됩니다.']];
 summary.getRange('D20').values=[['현금흐름은 비USDT 비용 환산 전이며 포지션 전체 수익률이 아닙니다.']];
 summary.getRange('D21').values=[['위의 전략 통계와 구분해서 확인하세요.']];
+// Keep every archived row and its fingerprint. Current statistics filter the same ledger.
+summary.getRange('A26:G26').merge();
+summary.getRange('A26').values=[['현재 BASE 전략 성적']];
+summary.getRange('A26:G26').format={fill:'#263344',font:{bold:true,color:'#FFFFFF'},rowHeight:28};
+summary.getRange('A27:G27').merge();
+summary.getRange('A27').values=[[safe(data.current_strategy_name)]];
+summary.getRange('A27:G27').format.rowHeight=24;
+summary.getRange('A28:B28').values=[['현재 설정과 같은 버전','값']];
+summary.getRange('A28:B28').format={fill:'#EFF3F7',font:{bold:true},rowHeight:28};
+summary.getRange('D28:E28').values=[['현재 버전 해시',data.current_strategy_version]];
+summary.getRange('A29:A36').values=[['현재 확인 거래 수'],['현재 승률'],['현재 순손익 (USDT)'],
+ ['현재 수수료 (USDT)'],['현재 펀딩 (USDT)'],['현재 평균 순손익 (USDT)'],['현재 Profit factor'],['현재 미확인 완료 기록 수']];
+const versionRange="'거래내역'!Q6:Q"+n, statusRange="'거래내역'!P6:P"+n;
+const currentCriteria=versionRange+',$E$28,'+statusRange+',"확인 완료"';
+summary.getRange('B29').formulas=[['=COUNTIFS('+currentCriteria+')']];
+summary.getRange('B30').formulas=[['=IF(B29=0,"자료 없음",COUNTIFS('+currentCriteria+','+nets+',">0")/B29)']];
+summary.getRange('B31').formulas=[['=IF(B29=0,"자료 없음",SUMIFS('+nets+','+currentCriteria+'))']];
+summary.getRange('B32').formulas=[['=IF(B29=0,"자료 없음",SUMIFS(\'거래내역\'!K6:K'+n+','+currentCriteria+'))']];
+summary.getRange('B33').formulas=[['=IF(B29=0,"자료 없음",SUMIFS(\'거래내역\'!L6:L'+n+','+currentCriteria+'))']];
+summary.getRange('B34').formulas=[['=IF(B29=0,"자료 없음",B31/B29)']];
+const currentPositive='SUMIFS('+nets+','+currentCriteria+','+nets+',">0")';
+const currentNegative='SUMIFS('+nets+','+currentCriteria+','+nets+',"<0")';
+summary.getRange('B35').formulas=[['=IF(B29=0,"자료 없음",IF('+currentNegative+'=0,"손실 거래 없음",'+currentPositive+'/-'+currentNegative+'))']];
+summary.getRange('B36').formulas=[['=COUNTIF('+versionRange+',$E$28)-B29']];
+summary.getRange('B29').setNumberFormat('#,##0');
+summary.getRange('B30').setNumberFormat('0.00%');
+summary.getRange('B31:B34').setNumberFormat(money);
+summary.getRange('B35').setNumberFormat('0.00');
+summary.getRange('B36').setNumberFormat('#,##0');
+for(const [range,text] of [
+ ['D29:G30','현재 전략의 확인 거래가 0건이면 승률·손익은 자료 없음으로 표시합니다.'],
+ ['D32:G33','과거 전략 거래와 버전 해시는 원장에 그대로 보관합니다. 현재 성과로 합산하지 않습니다.'],
+ ['D35:G36','완료 포지션의 실제 체결·USDT 비용·펀딩을 확인한 성적이며 저장 연구 결과를 넣지 않습니다.']]) {
+ summary.getRange(range).merge();summary.getRange(range.split(':')[0]).values=[[text]];
+ summary.getRange(range).format.wrapText=true;summary.getRange(range).format.verticalAlignment='center';
+ summary.getRange(range).format.rowHeight=24;
+}
 wb.recalculate();
 const inspected=await wb.inspect({kind:'match',searchTerm:'#REF!|#DIV/0!|#VALUE!|#NAME\\?|#NUM!|#SPILL!|#CALC!',options:{useRegex:true,maxResults:20},maxChars:1500});
 if(/"matchCount"\s*:\s*[1-9]/.test(inspected.ndjson)) throw new Error('Workbook formula errors');
 if(previewDir) {
   await fs.mkdir(previewDir,{recursive:true});
   for(const sheet of [summary,trades,fills,funding]) {
-    const preview=await wb.render({sheetName:sheet.name,range:sheet===summary?'A1:G24':sheet===funding?'A1:E9':'A1:H9',scale:1.5,format:'png'});
+    const preview=await wb.render({sheetName:sheet.name,range:sheet===summary?'A1:G36':sheet===funding?'A1:E9':'A1:H9',scale:1.5,format:'png'});
     await fs.writeFile(path.join(previewDir,sheet.name+'.png'),new Uint8Array(await preview.arrayBuffer()));
   }
   const check=await wb.inspect({kind:'table',range:'요약!A4:B14',include:'values,formulas',tableMaxRows:11,tableMaxCols:2,maxChars:3000});
   await fs.writeFile(path.join(previewDir,'checks.jsonl'),check.ndjson);
+  const currentCheck=await wb.inspect({kind:'table',range:'요약!A28:B36',include:'values,formulas',tableMaxRows:9,tableMaxCols:2,maxChars:4000});
+  await fs.writeFile(path.join(previewDir,'current-version-checks.jsonl'),currentCheck.ndjson);
 }
 const xlsx=await SpreadsheetFile.exportXlsx(wb);
 await xlsx.save(output);

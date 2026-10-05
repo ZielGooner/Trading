@@ -1,7 +1,6 @@
 """User-started live execution. No trading starts on launch or account connection."""
 import ctypes
-from datetime import datetime, timezone
-from decimal import Decimal, ROUND_FLOOR, ROUND_CEILING
+from decimal import Decimal, ROUND_FLOOR, ROUND_CEILING, ROUND_HALF_UP
 import hashlib
 import json
 from math import lcm
@@ -15,6 +14,7 @@ import time
 from trading.binance_live import Binance, BinanceError
 from trading.config import HERE, load, parameters_for
 from trading.signals import build
+from trading.indicators import validate_bars
 from trading.history import HistoryStore
 
 INTERVAL = 14400
@@ -41,13 +41,13 @@ def quantize(value, step, up=False):
 
 
 
-def entry_size(available, leverage, fee, reference, minimum_price, cap, filters):
-    """Use 10% normally; raise only to the smallest jointly valid entry/exit lot."""
+def entry_size(available, leverage, fee, reference, minimum_price, cap, filters, *, equity=None, gross=0):
+    """Request 50% margin at 2x; fees are separate, lots round DOWN, no minimum top-up."""
     available, leverage, fee, reference, minimum_price, cap = map(
         decimal, (available, leverage, fee, reference, minimum_price, cap))
     if available <= 0:
         raise ValueError('가용 증거금이 없습니다.')
-    if min(leverage, reference, minimum_price, cap) <= 0 or fee < 0:
+    if leverage != 2 or min(reference, minimum_price, cap) <= 0 or fee < 0:
         raise ValueError('주문 금액 계산 조건이 올바르지 않습니다.')
     lot, market = filters['LOT_SIZE'], filters['MARKET_LOT_SIZE']
     lot_step, market_step = decimal(lot['stepSize']), decimal(market['stepSize'])
@@ -65,18 +65,29 @@ def entry_size(available, leverage, fee, reference, minimum_price, cap, filters)
     if minimum <= 0:
         raise ValueError('거래소 최소 주문 조건이 올바르지 않습니다.')
     maximum = min(decimal(lot['maxQty']), decimal(market['maxQty']), cap / reference)
-    base_budget = available * Decimal('0.1')
+    base_budget = available * Decimal('0.5')
     unit_cost = reference / leverage + reference * fee
-    normal_quantity = quantize(min(base_budget / unit_cost, maximum), step)
-    quantity = max(normal_quantity, minimum)
-    if quantity > maximum:
-        raise ValueError('최소 주문 수량이 거래소 최대 수량 또는 명목 한도를 초과합니다.')
+    maximum = min(maximum, available / unit_cost)
+    if equity is not None:
+        headroom = max(Decimal(0), 2 * decimal(equity) - decimal(gross))
+        maximum = min(maximum, headroom / (reference * (1 + 2 * fee)))
+    quantity = quantize(min(base_budget * leverage / reference, maximum), step)
+    if quantity < minimum:
+        raise ValueError('50% 증거금 또는 2배 총노출 한도 안에서 최소 주문 수량/금액을 충족하지 못합니다.')
     required = quantity * unit_cost
     if required > available:
         raise ValueError('최소 주문에 필요한 증거금과 진입 수수료가 가용 잔고를 초과합니다.')
-    return {'quantity': quantity, 'budget': max(base_budget, required),
-            'base_budget': base_budget, 'minimum_override': quantity > normal_quantity,
+    return {'quantity': quantity, 'budget': required,
+            'base_budget': base_budget, 'minimum_override': False,
             'estimated_cost': required, 'entry_fee_rate': fee, 'notional_cap': cap}
+
+
+def tick_distance(value, tick):
+    """Pine's positive-distance round-half-up, independently for SL and TP."""
+    value, tick = decimal(value), decimal(tick)
+    if value <= 0 or tick <= 0:
+        raise ValueError('TP/SL 거리는 양수여야 합니다.')
+    return max(Decimal(1), (value / tick).to_integral_value(rounding=ROUND_HALF_UP)) * tick
 
 
 def write_json(path, value):
@@ -111,10 +122,11 @@ class Engine:
     def __init__(self, client, root=HERE, emit=lambda value: None, config=None):
         self.client, self.root, self.emit = client, Path(root), emit
         self.config = config or load(self.root / 'strategy.json')
+        self.symbols = tuple(self.config['strategy_by_symbol'])
         self.account_id = hashlib.sha256(client.key.encode()).hexdigest()[:24]
         self.path = self.root / 'private_state' / ('live-' + self.account_id + '.json')
         self.state = json.loads(self.path.read_text(encoding='utf-8')) if self.path.exists() else {
-            'version': 1, 'account_id': self.account_id, 'positions': {}, 'last_bar': {}, 'day': None}
+            'version': 1, 'account_id': self.account_id, 'positions': {}, 'last_bar': {}}
         if self.state.get('version') != 1 or self.state.get('account_id') != self.account_id:
             raise ValueError('실계좌 상태 파일을 확인해야 합니다.')
         self.history = HistoryStore(self.root, self.account_id)
@@ -125,10 +137,11 @@ class Engine:
         self.positions = {}
         self.filters = {}
         self.candles = {}
+        self._batch_available = None
         self.last_message = '연결 전'
 
     def save(self):
-        self.history.remember(self.state['positions'], self.config, self.client.now())
+        self.history.remember(self.state['positions'], self.client.now())
         write_json(self.path, self.state)
 
     def log(self, message):
@@ -153,7 +166,7 @@ class Engine:
                                       unrealized=p.get('unRealizedProfit', '0'),
                                       managed=s in self.state['positions'])
                                  for s, p in self.positions.items()] if self.connected else [],
-                   'managed_count': len(self.state['positions']), 'daily_entry_blocked': bool(self.state['day'] and self.state['day']['blocked'])})
+                   'managed_count': len(self.state['positions'])})
 
     def read_account(self):
         result = self.client.call('GET', '/fapi/v3/account')
@@ -171,16 +184,6 @@ class Engine:
                     positions[row['symbol']] = row
         self.positions = positions
         self.connected = True
-        day = datetime.fromtimestamp(self.client.now() / 1000, timezone.utc).date().isoformat()
-        equity = decimal(self.account['walletBalance']) + decimal(self.account['unrealizedProfit'])
-        if not self.state['day'] or self.state['day']['date'] != day:
-            self.state['day'] = {'date': day, 'start_equity': text(equity), 'blocked': False}
-        if decimal(self.state['day']['start_equity']) <= 0 and equity > 0:
-            self.state['day']['start_equity'] = text(equity)
-        base = decimal(self.state['day']['start_equity'])
-        if base > 0 and equity <= base * (1 - decimal(self.config['daily_loss_limit'])):
-            self.state['day']['blocked'] = True
-        self.save()
 
     def check_mode(self):
         cfg = self.client.call('GET', '/fapi/v1/accountConfig')
@@ -199,7 +202,7 @@ class Engine:
 
     def refresh_filters(self):
         info = self.client.call('GET', '/fapi/v1/exchangeInfo')
-        for symbol in self.config['entry_priority']:
+        for symbol in self.symbols:
             item = next((x for x in info['symbols'] if x['symbol'] == symbol), None)
             if not item or item['status'] != 'TRADING' or item['contractType'] != 'PERPETUAL' or item['marginAsset'] != 'USDT':
                 raise ValueError(symbol + ' USDT 무기한 거래 조건을 확인하지 못했습니다.')
@@ -214,7 +217,7 @@ class Engine:
             raise ValueError('계정 연결 상태를 먼저 확인하세요.')
         self.check_mode()
         self.read_account()
-        for symbol in self.config['entry_priority']:
+        for symbol in self.symbols:
             standard, algos = self.orders(symbol)
             record = self.state['positions'].get(symbol)
             if not record and (symbol in self.positions or standard or algos):
@@ -223,19 +226,19 @@ class Engine:
                 allowed = {record['id'] + '-e', *record.get('close_ids', [])}
                 if any(o['clientOrderId'] not in allowed for o in standard) or any(o['clientAlgoId'] not in {record['id'] + '-s', record['id'] + '-t'} for o in algos):
                     raise ValueError(symbol + ': 외부 주문이 섞여 있습니다.')
-        for symbol in self.config['entry_priority']:
+        for symbol in self.symbols:
             self.bars(symbol)
         # A click authorizes this process only; persisted state never starts trading automatically.
         self.client.authorized = True
         self.reconcile()
-        for symbol in self.config['entry_priority']:
+        for symbol in self.symbols:
             if symbol not in self.state['positions']:
                 self.read_account()
                 if symbol in self.positions:
                     raise ValueError(symbol + ': 시작 준비 중 외부 포지션 감지')
                 self.configure_symbol(symbol)
         boundary = self.client.now() // (INTERVAL * 1000) * INTERVAL
-        for symbol in self.config['entry_priority']:
+        for symbol in self.symbols:
             self.state['last_bar'][symbol] = boundary
         self.save()
         self.entries = True
@@ -270,8 +273,7 @@ class Engine:
                 b = dict(t=int(row[0]) // 1000, o=float(row[1]), h=float(row[2]), l=float(row[3]), c=float(row[4]), v=float(row[5]))
                 if decimal(row[5]) < 0:
                     raise ValueError(symbol + ': 잘못된 거래량')
-                from trading.primitives import _bar
-                _bar(b, 'live')
+                validate_bars([b])
                 if b['t'] % INTERVAL or int(row[6]) != (b['t'] + INTERVAL) * 1000 - 1:
                     raise ValueError(symbol + ': 잘못된 봉 경계')
                 if bars and b['t'] != bars[-1]['t'] + INTERVAL:
@@ -310,12 +312,12 @@ class Engine:
             raise PermissionError('신규 진입이 승인되지 않았습니다.')
         self.check_mode()
         self.read_account()
-        if self.state['day']['blocked'] or symbol in self.positions or symbol in self.state['positions']:
+        if symbol in self.positions or symbol in self.state['positions']:
             return
         if any(self.orders(symbol)):
             raise ValueError(symbol + ': 기존 주문이 있어 진입을 차단했습니다.')
         self.refresh_filters()  # Minimums can change while the program is running.
-        cap = min(self.configure_symbol(symbol), decimal(self.config['cap_notional']))
+        cap = self.configure_symbol(symbol)
         book = self.client.call('GET', '/fapi/v1/ticker/bookTicker', {'symbol': symbol})
         if abs(self.client.now() - int(book['time'])) > 5000:
             raise ValueError(symbol + ': 호가가 오래되었습니다.')
@@ -325,27 +327,34 @@ class Engine:
         direction = int(signal['direction'])
         filters = self.filters[symbol]
         tick = decimal(filters['PRICE_FILTER']['tickSize'])
-        slip = decimal(self.config['slippage'])
-        price = quantize((ask if direction == 1 else bid) * (1 + direction * slip), tick, direction == 1)
+        slip = decimal(self.config['slippage_ticks']) * tick
+        price = quantize((ask if direction == 1 else bid) + direction * slip, tick, direction == 1)
         if not decimal(filters['PRICE_FILTER']['minPrice']) <= price <= decimal(filters['PRICE_FILTER']['maxPrice']):
             raise ValueError('진입 가격 필터 오류')
         lev = self.config['leverage_by_symbol'][symbol]
         available = decimal(self.account['availableBalance'])
+        if self._batch_available is not None:
+            available = min(available, self._batch_available)
         commission = self.client.call('GET', '/fapi/v1/commissionRate', {'symbol': symbol})
         fee = max(decimal(commission['takerCommissionRate']), decimal(self.config['taker_fee']))
         reference = max(price, ask)
         try:
-            sizing = entry_size(available, lev, fee, reference, min(bid, price), cap, filters)
+            equity = decimal(self.account['walletBalance']) + decimal(self.account['unrealizedProfit'])
+            gross = sum(abs(decimal(p['positionAmt'])) * decimal(p.get('markPrice', p['entryPrice']))
+                        for p in self.positions.values())
+            sizing = entry_size(available, lev, fee, reference, min(bid, price), cap, filters,
+                                equity=equity, gross=gross)
         except ValueError as error:
             self.log(symbol + ': ' + str(error) + ' 진입을 건너뜁니다.')
             return
         quantity, budget = sizing['quantity'], sizing['budget']
-        distance = decimal(signal['stop_distance'])
+        distance = tick_distance(signal['stop_distance'], tick)
+        target_distance = tick_distance(signal['take_profit_distance'], tick)
         # Do not open an isolated position whose planned stop lies near/beyond liquidation.
         margin = reference / lev
         mmr = decimal(self.config['maintenance_margin_rate'])
         liq = (reference - direction * margin) / (1 - direction * mmr)
-        if distance < tick or reference + direction * distance * decimal(signal['take_profit_r']) <= 0:
+        if distance < tick or reference + direction * target_distance <= 0:
             self.log(symbol + ': 유효한 TP/SL 가격을 만들 수 없어 건너뜁니다.')
             return
         if distance <= 0 or distance >= abs(reference - liq) * decimal('0.7'):
@@ -354,21 +363,21 @@ class Engine:
         if self.client.now() / 1000 - boundary > ENTRY_WINDOW:
             self.log(symbol + ': 완료봉 진입 허용 시간(90초)이 지나 건너뜁니다.')
             return
-        if sizing['minimum_override']:
-            ratio = quantity * reference / lev / available * 100
-            self.log(symbol + ': 최소 주문 조건을 맞추기 위해 10% 기준을 초과해 수량을 ' +
-                     text(quantity) + '로 조정합니다. 예상 증거금 ' + format(ratio, '.2f') +
-                     '%, 증거금+진입 수수료 ' + format(sizing['estimated_cost'], '.4f') + ' USDT.')
         token = hashlib.sha256((self.account_id + symbol + str(boundary)).encode()).hexdigest()[:22]
         record = {'id': 'tr-' + token, 'phase': 'intent', 'direction': direction,
                   'requested_quantity': text(quantity), 'budget': text(budget), 'leverage': lev,
                   'base_budget': text(sizing['base_budget']), 'minimum_override': sizing['minimum_override'],
                   'entry_fee_rate': text(fee), 'notional_cap': text(cap),
-                  'distance': text(distance), 'reward': signal['take_profit_r'],
-                  'opened_t': boundary, 'deadline': boundary + int(signal['max_hold_bars']) * 3600,
+                  'distance': text(distance), 'target_distance': text(target_distance),
+                  'opened_t': boundary, 'deadline': boundary + int(signal['max_hold_bars']) * INTERVAL if signal['max_hold_bars'] else None,
+                  'flip_exit': bool(signal.get('flip_exit', False)), 'profile': signal.get('profile'),
+                  'strategy_version': self.config['strategy_version'],
+                  'strategy_snapshot': json.loads(json.dumps(self.config)),
                   'close_ids': [], 'protection_submitted': {}}
         self.state['positions'][symbol] = record
         self.save()  # Intent must be durable before a request can reach the exchange.
+        if self._batch_available is not None:
+            self._batch_available = max(Decimal(0), available - budget)
         try:
             self.client.call('POST', '/fapi/v1/order', {
                 'symbol': symbol, 'side': 'BUY' if direction == 1 else 'SELL', 'positionSide': 'BOTH',
@@ -381,6 +390,16 @@ class Engine:
                 self.save()
             raise
         self.reconcile_symbol(symbol)
+        if self._batch_available is not None:
+            current = self.state['positions'].get(symbol)
+            if current is None:
+                spent = Decimal(0)  # An IOC that did not fill consumes no margin.
+            elif 'quantity' in current and 'entry' in current:
+                notional = decimal(current['quantity']) * decimal(current['entry'])
+                spent = notional / lev + notional * fee
+            else:
+                spent = budget  # Unconfirmed fills keep their full reservation.
+            self._batch_available = max(Decimal(0), available - spent)
 
     def query_entry(self, symbol, record):
         result = self.client.call('GET', '/fapi/v1/order', {'symbol': symbol, 'origClientOrderId': record['id'] + '-e'})
@@ -400,9 +419,10 @@ class Engine:
         direction = record['direction']
         tick = self.filters[symbol]['PRICE_FILTER']['tickSize']
         # Round both triggers towards entry so discretization cannot widen initial risk.
+        target_distance = decimal(record['target_distance']) if 'target_distance' in record else decimal(record['distance']) * decimal(record['reward'])
         record.update(phase='open', quantity=text(quantity), entry=text(price), entry_order_id=result.get('orderId'),
                       stop=text(quantize(price - direction * decimal(record['distance']), tick, direction == 1)),
-                      target=text(quantize(price + direction * decimal(record['distance']) * decimal(record['reward']), tick, direction == -1)))
+                      target=text(quantize(price + direction * target_distance, tick, direction == -1)))
         self.save()
         return True
 
@@ -531,11 +551,11 @@ class Engine:
         # Old records have no fee allowance field, so keep their original margin-only guard.
         cost = notional / record['leverage'] + notional * decimal(record.get('entry_fee_rate', '0'))
         if (min(stop, target) <= 0 or cost > decimal(record['budget'])
-                or notional > decimal(record.get('notional_cap', self.config['cap_notional']))):
+                or ('notional_cap' in record and notional > decimal(record['notional_cap']))):
             return self.close_position(symbol, record, '증거금/가격 범위 초과')
         if liq <= 0 or (stop - liq) * record['direction'] <= 0:
             return self.close_position(symbol, record, '청산가보다 늦은 손절')
-        if self.client.now() / 1000 >= record['deadline']:
+        if record.get('deadline') and self.client.now() / 1000 >= record['deadline']:
             return self.close_position(symbol, record, '최대 보유 기간')
         try:
             self.protect(symbol, record)
@@ -563,22 +583,43 @@ class Engine:
         if time.monotonic() - self.client.synced > 120:
             self.client.sync()
         self.read_account()
+        held_before_management = set(self.state['positions'])
         self.reconcile()
         boundary = self.client.now() // (INTERVAL * 1000) * INTERVAL
-        if self.entries:
-            for symbol in self.config['entry_priority']:
+        # Full management first; collect the entire same-boundary entry batch before ordering.
+        # A position closed by time/opposite here cannot reverse from the same signal candle.
+        candidates = []
+        if self.entries or self.client.authorized:
+            for symbol in self.symbols:
                 if self.state['last_bar'].get(symbol, 0) >= boundary:
                     continue
+                p = parameters_for(self.config, symbol)
+                signal = build(self.bars(symbol), p).get(boundary)
                 self.state['last_bar'][symbol] = boundary
                 self.save()
-                if self.client.now() / 1000 - boundary > ENTRY_WINDOW or symbol in self.state['positions']:
+                record = self.state['positions'].get(symbol)
+                if record:
+                    if (self.client.authorized and record.get('flip_exit', False) and signal
+                            and signal['direction'] == -record['direction'] and record['phase'] == 'open'):
+                        self.close_position(symbol, record, '확정 반대 신호')
                     continue
-                p = parameters_for(self.config, symbol)
-                signal = build(self.bars(symbol), p['entry_parameters'], p['exit_parameters']).get(boundary)
-                if signal:
-                    self.enter(symbol, signal, boundary)
+                if signal and self.entries and symbol not in held_before_management:
+                    candidates.append((symbol, signal))
                 else:
                     self.log(symbol + ': 완료 4시간봉 진입 신호 없음')
+        # Balance and position REST snapshots can arrive at different times. Retain
+        # the confirmed cost locally so a stale balance cannot reuse the same funds.
+        self._batch_available = decimal(self.account['availableBalance'])
+        try:
+            for symbol, signal in sorted(candidates, key=lambda row: (-decimal(row[1]['turnover']), row[0])):
+                if not self.entries:
+                    break
+                if self.client.now() / 1000 - boundary > ENTRY_WINDOW:
+                    self.log(symbol + ': 완료봉 진입 허용 시간(90초)이 지나 건너뜁니다.')
+                    continue
+                self.enter(symbol, signal, boundary)
+        finally:
+            self._batch_available = None
         self.publish()
 
 

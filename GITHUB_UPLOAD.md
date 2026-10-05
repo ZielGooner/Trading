@@ -6,8 +6,8 @@
 
 - `.gitignore`, `.gitattributes`, `README.md`, 이 안내 문서
 - `app/`, `trading/`, `tests/`
-- `build.ps1`, `run.ps1`, `strategy.json`
-- `data/`의 원본 시세·거래 규칙 자료 14개. 차트와 데이터 출처 검증에 필요하므로 함께 올립니다.
+- `build.ps1`, `strategy.json`
+- `data/`의 과거 공개 저장 시세. 현재 화면 차트는 Binance 공개 실시간 시세를 사용합니다.
 
 `.venv/`, `private_state/`, `records/`, `reports/`, `.ui-update/`, `.env`, 실행 파일, 데이터베이스, 엑셀, 로그, 백업과 ZIP은 `.gitignore`에서 제외합니다. 제외한 파일은 로컬에 계속 보관됩니다. API 키는 프로그램의 **API 설정**에 입력하며 저장소에 넣지 않습니다.
 
@@ -48,7 +48,7 @@ GitHub 인증이 요청되면 Git의 인증 창에서 진행합니다. 인증 �
 
 ## 소스 ZIP으로 시작하는 경우
 
-이 준비 작업에서 생성한 `reports/github-upload/Trading-source.zip`은 위 소스 파일만 담은 시점별 복사본입니다. ZIP 안의 `Trading` 폴더를 **Documents 아래 새 폴더**에 풀고 첫 업로드 절차를 진행하면 됩니다. ZIP 자체를 저장소에 올리는 대신 압축을 푼 소스를 Git으로 커밋합니다. 이후 코드를 수정했다면 원래 프로젝트에서 Git으로 업로드하여 최신 변경 사항을 포함합니다.
+소스 ZIP은 생성 시점의 복사본입니다. 이전 ZIP에는 현재 제거된 전략이나 실행 도구가 남아 있을 수 있으므로 최신 Git 소스를 사용하세요. 새 소스 ZIP을 사용하는 경우 Documents 아래 새 폴더에 풀고 첫 업로드 절차를 진행합니다. ZIP 자체를 올리는 대신 압축을 푼 소스를 Git으로 커밋합니다.
 
 ## 이후 변경 사항 업로드
 

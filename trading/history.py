@@ -10,7 +10,8 @@ from decimal import Decimal
 from pathlib import Path
 
 DAY = 86400000
-SYMBOLS = ('BTCUSDT', 'XRPUSDT', 'SOLUSDT')
+SYMBOLS = ('BTCUSDT', 'XRPUSDT', 'SOLUSDT', 'HYPEUSDT')
+LEGACY_UNKNOWN_STRATEGY = {'schema': 'legacy_unknown', 'strategy_version': '원전략 미확인'}
 
 
 def number(value):
@@ -22,6 +23,11 @@ def number(value):
 
 def encode(value):
     return json.dumps(value, ensure_ascii=False, allow_nan=False, sort_keys=True)
+
+
+def strategy_digest(config):
+    """Keep the archived config fingerprint stable across displays and exports."""
+    return hashlib.sha256(encode(config).encode()).hexdigest()[:12]
 
 
 def identity(key):
@@ -73,16 +79,20 @@ class HistoryStore:
             db.executemany('INSERT OR REPLACE INTO meta VALUES (?,?)',
                            [(k, encode(v)) for k, v in values.items()])
 
-    def remember(self, positions, strategy, now):
+    def remember(self, positions, now):
         # Called before orders are sent. Removed runtime records remain in this archive.
         with self.connect() as db:
             active = {row[0] for row in db.execute('SELECT id FROM positions WHERE active=1')}
             current = set()
             for symbol, record in positions.items():
                 current.add(record['id'])
+                snapshot = record.get('strategy_snapshot')
+                # A recovered position without its entry-time settings cannot be
+                # attributed to today's strategy. Existing archive hashes stay unchanged.
+                archived_strategy = snapshot if isinstance(snapshot, dict) and snapshot else LEGACY_UNKNOWN_STRATEGY
                 db.execute("""INSERT INTO positions VALUES (?,?,?,?,1,NULL)
                     ON CONFLICT(id) DO UPDATE SET payload=excluded.payload,active=1,closed_ms=NULL""",
-                    (record['id'], symbol, encode(record), encode(strategy)))
+                    (record['id'], symbol, encode(record), encode(archived_strategy)))
             for record_id in active - current:
                 db.execute('UPDATE positions SET active=0,closed_ms=? WHERE id=?', (int(now), record_id))
 
@@ -281,13 +291,14 @@ def closed_trades(snapshot):
         entry_value = sum((number(f['qty'])*number(f['price']) for f in entries), Decimal(0))
         exit_value = sum((number(f['qty'])*number(f['price']) for f in exits), Decimal(0))
         leverage = int(record['leverage'])
-        version = hashlib.sha256(encode(position['strategy']).encode()).hexdigest()[:12]
+        version = strategy_digest(position['strategy'])
         result.append(dict(id=position['id'],symbol=symbol,direction='LONG' if direction==1 else 'SHORT',
             opened_ms=opened,closed_ms=closed,quantity=float(quantity),entry=float(entry_value/quantity),
             exit=float(exit_value/exit_quantity) if exit_quantity else None, leverage=leverage,
             gross=float(gross),fees=float(fees),funding=float(funding),net=float(net) if net is not None else None,
             margin_return=float(net/(entry_value/leverage)) if net is not None else None,
             hours=(closed-opened)/3600000, status=status, strategy_version=version,
+            strategy_name=position['strategy'].get('strategy_version', position['strategy'].get('schema', '과거 전략')),
             minimum_override=bool(record.get('minimum_override')),stop=record.get('stop'),
             target=record.get('target'),exit_reason=record.get('close_reason','거래소/수동 종료 (원인 미확정)')))
     return sorted(result,key=lambda x:(x['closed_ms'],x['id']))
@@ -336,7 +347,7 @@ def account_activity(snapshot, start, end):
                                funding_usdt=funding_usdt,usdt_cash_flow=gross-fee_usdt+funding_usdt)
     recent=[{k:f.get(k) for k in ('symbol','time','side','positionSide','price','qty','realizedPnl','commission','commissionAsset')}
             for f in selected[-100:]]
-    return dict(scope='BTC/XRP/SOL 전체 계좌 체결. 수동/외부 및 전략 귀속 미확인 거래 포함.',
+    return dict(scope='BTC/XRP/SOL/HYPE 전체 계좌 체결. 수동/외부 및 전략 귀속 미확인 거래 포함.',
                 fill_count=len(selected),funding_count=len(funding),realized_pnl_usdt=total(selected,'realizedPnl'),
                 commission_by_asset=fees,funding_by_asset=funds,
                 usdt_cash_flow=total(selected,'realizedPnl')-fees.get('USDT',0)+funds.get('USDT',0),
@@ -354,6 +365,10 @@ def analysis_input(store, config, days, now=None):
     start = now-int(days)*DAY
     chosen = [r for r in all_trades if start <= r['closed_ms'] < now]
     previous = [r for r in all_trades if start-int(days)*DAY <= r['closed_ms'] < start]
+    current_version = strategy_digest(config)
+    current_chosen = [r for r in chosen if r.get('strategy_version') == current_version]
+    current_previous = [r for r in previous if r.get('strategy_version') == current_version]
+    versions = sorted({r['strategy_version'] for r in chosen if r.get('strategy_version')})
     meta = snapshot['meta']
     public_rows = [{k:v for k,v in r.items() if k != 'id'} for r in chosen]
     return dict(period={'days':int(days),'start_utc':datetime.fromtimestamp(start/1000,timezone.utc).isoformat(),
@@ -362,15 +377,22 @@ def analysis_input(store, config, days, now=None):
                           'sync_error':meta.get('sync_error'),'requested_period_covered':bool(meta.get('sync_start') is not None and meta['sync_start']<=start
                               and not any(a<now and b>=start for a,b in meta.get('coverage_gaps',[]))),
                           'snapshot_age_minutes':(now-meta['sync_end'])/60000 if meta.get('sync_end') else None},
-                statistics=statistics(chosen),previous_period=statistics(previous),
+                statistics=statistics(current_chosen),previous_period=statistics(current_previous),
+                current_strategy_version=current_version,
+                current_strategy_name=config.get('strategy_version', config.get('schema', '현재 전략')),
+                statistics_scope='현재 설정과 같은 전략 버전의 귀속 확인 완료 거래',
+                historical_strategy_statistics=statistics(chosen),
+                by_strategy_version={version:statistics([r for r in chosen if r.get('strategy_version') == version]) for version in versions},
                 account_activity=account_activity(snapshot,start,now),
                 previous_account_activity=account_activity(snapshot,start-int(days)*DAY,start),
-                by_symbol={s:statistics([r for r in chosen if r['symbol']==s]) for s in SYMBOLS},
-                by_direction={s:statistics([r for r in chosen if r.get('direction')==s]) for s in ('LONG','SHORT')},
-                current_strategy={k:v for k,v in config.items() if k not in ('orders_enabled','initial_equity','schema')},
+                by_symbol={s:statistics([r for r in current_chosen if r['symbol']==s]) for s in SYMBOLS},
+                by_direction={s:statistics([r for r in current_chosen if r.get('direction')==s]) for s in ('LONG','SHORT')},
+                current_strategy={k:v for k,v in config.items() if k not in ('orders_enabled','initial_equity')},
                 live_order_switch='실계좌 실행 스위치 상태는 이 분석에 제공되지 않음',
                 trades=public_rows[-500:],trades_omitted=max(0,len(public_rows)-500),
-                definitions=['원시 체결은 모든 BTC/XRP/SOL 거래를 보관한다. 전략 통계에는 프로그램 진입과 정확히 연결된 완료 거래만 포함한다.',
+                definitions=['원시 체결은 모든 BTC/XRP/SOL/HYPE 거래를 보관한다. 현재 전략 통계에는 프로그램 진입과 정확히 연결되고 현재 설정 버전이 일치하는 완료 거래만 포함한다.',
+                             '과거 전략 기록과 전략 버전 해시는 보존하며 버전별 통계와 전체 확인 거래 통계로 구분한다. 현재 전략 성과로 합산하지 않는다.',
+                             '진입 당시 설정이 없는 과거 기록은 원전략 미확인으로 보관한다. 현재 설정으로 추정해 귀속하지 않는다.',
                              '순손익 = 거래소 실현손익 - 진입/청산 USDT 수수료 + 보유기간 펀딩. 불명확한 거래는 제외한다.',
                              '승률 분모는 순손익이 확인된 완료 거래 수이며 손익 0 거래도 분모에 포함한다.',
                              '낙폭은 완료 거래의 누적 실현손익 USDT 기준이다. 미실현손익 포함 계좌 최대낙폭/계좌 수익률은 계산하지 않는다.',

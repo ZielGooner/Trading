@@ -1,11 +1,15 @@
 import copy
 import json
+import os
 from pathlib import Path
+import shutil
 import tempfile
 import threading
 import unittest
 from unittest.mock import patch
-from trading.history import HistoryStore, closed_trades, statistics, analysis_input, sync_history, DAY
+import zipfile
+from xml.etree import ElementTree
+from trading.history import HistoryStore, closed_trades, statistics, analysis_input, sync_history, DAY, strategy_digest, LEGACY_UNKNOWN_STRATEGY
 from trading.config import load, HERE
 from trading.review import analyze, validate_response, SCHEMA
 
@@ -29,15 +33,16 @@ class HistoryTests(unittest.TestCase):
         self.opened=NOW-20*DAY
         self.closed=NOW-3*DAY
         self.record=dict(id='tr-owned',phase='open',direction=1,entry_order_id='100',quantity='1',
-                         leverage=10,stop='90',target='160',minimum_override=True)
+                         leverage=10,stop='90',target='160',minimum_override=True,
+                         strategy_snapshot=copy.deepcopy(self.config))
         self.rows=[fill(1,100,self.opened,'BUY','.4'),
                    fill(2,100,self.opened+1,'BUY','.6'),
                    fill(3,101,self.closed-1,'SELL','.5','10'),
                    {**fill(4,102,self.closed,'SELL','.5','20'),'price':'140','quoteQty':'70'}]
 
     def seeded(self):
-        self.store.remember({'BTCUSDT':self.record},self.config,self.opened)
-        self.store.remember({},self.config,self.closed+10000)
+        self.store.remember({'BTCUSDT':self.record},self.opened)
+        self.store.remember({},self.closed+10000)
         self.store.ingest_fills(self.rows,'BTCUSDT')
         self.store.ingest_funding([dict(symbol='BTCUSDT',incomeType='FUNDING_FEE',income='-2',
                                        asset='USDT',time=self.opened+DAY,tranId=99)])
@@ -62,6 +67,118 @@ class HistoryTests(unittest.TestCase):
         self.assertAlmostEqual(row['margin_return'],2.76)
         self.assertTrue(row['minimum_override'])
 
+    def test_hype_fills_and_funding_are_retained_without_orders(self):
+        rows=[fill(80,800,self.closed,'SELL','1','7',symbol='HYPEUSDT')]
+        self.store.ingest_fills(rows,'HYPEUSDT')
+        self.store.ingest_funding([dict(symbol='HYPEUSDT',incomeType='FUNDING_FEE',income='-.2',
+                                       asset='USDT',time=self.closed,tranId=800)])
+        payload=analysis_input(self.store,self.config,7,NOW)
+        self.assertIn('HYPEUSDT',payload['by_symbol'])
+        self.assertAlmostEqual(payload['account_activity']['by_symbol']['HYPEUSDT']['usdt_cash_flow'],6.7)
+        self.assertEqual(payload['statistics']['verified_trades'],0)
+
+    def test_archived_strategy_snapshot_survives_current_strategy_change(self):
+        old=copy.deepcopy(self.config)
+        old['strategy_version']='ARCHIVED_TEST_VERSION'
+        self.record['strategy_snapshot']=old
+        self.seeded()
+        before=closed_trades(self.store.snapshot())[0]
+        self.store.remember({'BTCUSDT':self.record},NOW)
+        after=closed_trades(self.store.snapshot())[0]
+        self.assertEqual(before['strategy_version'],after['strategy_version'])
+        self.assertEqual(after['strategy_name'],'ARCHIVED_TEST_VERSION')
+        payload=analysis_input(self.store,self.config,7,NOW)
+        self.assertEqual(payload['statistics']['verified_trades'],0)
+        self.assertEqual(payload['historical_strategy_statistics']['verified_trades'],1)
+        self.assertEqual(payload['by_strategy_version'][before['strategy_version']]['verified_trades'],1)
+        self.assertNotEqual(payload['current_strategy_version'],before['strategy_version'])
+
+    def test_first_archive_of_snapshotless_legacy_record_is_not_current_strategy(self):
+        self.record.pop('strategy_snapshot')
+        row=self.seeded()[0]
+        self.assertEqual(row['strategy_name'],'원전략 미확인')
+        self.assertEqual(self.store.snapshot()['positions'][0]['strategy'],LEGACY_UNKNOWN_STRATEGY)
+        self.assertNotEqual(row['strategy_version'],strategy_digest(self.config))
+        payload=analysis_input(self.store,self.config,7,NOW)
+        self.assertEqual(payload['statistics']['verified_trades'],0)
+        self.assertEqual(payload['historical_strategy_statistics']['verified_trades'],1)
+        self.assertAlmostEqual(payload['historical_strategy_statistics']['net_usdt'],27.6)
+        self.assertEqual(len(self.store.snapshot()['fills']),4)
+
+    def test_existing_archive_hash_survives_snapshotless_runtime_recovery(self):
+        old=copy.deepcopy(self.config)
+        old['strategy_version']='ORIGINAL_ARCHIVED_VERSION'
+        self.record['strategy_snapshot']=old
+        original=self.seeded()[0]['strategy_version']
+        self.record.pop('strategy_snapshot')
+        self.store.remember({'BTCUSDT':self.record},NOW)
+        self.assertEqual(self.store.snapshot()['positions'][0]['strategy'],old)
+        self.assertEqual(closed_trades(self.store.snapshot())[0]['strategy_version'],original)
+        self.assertEqual(analysis_input(self.store,self.config,7,NOW)['statistics']['verified_trades'],0)
+
+    def test_new_intent_snapshot_is_counted_as_current_strategy(self):
+        row=self.seeded()[0]
+        self.assertEqual(row['strategy_version'],strategy_digest(self.config))
+        self.assertEqual(analysis_input(self.store,self.config,7,NOW)['statistics']['verified_trades'],1)
+
+    def test_current_strategy_schema_is_present_without_order_switch(self):
+        payload=analysis_input(self.store,self.config,7,NOW)
+        self.assertEqual(payload['current_strategy']['schema'],self.config['schema'])
+        self.assertNotIn('orders_enabled',payload['current_strategy'])
+
+    def test_excel_preserves_old_rows_and_separates_current_version_in_runtime(self):
+        from trading.review import export_excel
+        self.record.pop('strategy_snapshot')
+        self.seeded()
+        row=closed_trades(self.store.snapshot())[0]
+        self.assertEqual(row['strategy_name'],'원전략 미확인')
+        old={**row,'id':'old-position'}
+        current={**row,'id':'current-position','strategy_version':strategy_digest(self.config),'leverage':2,
+                 'gross':-10,'fees':.4,'funding':-2,'margin_return':-.248}
+        scripts=self.root/'app'
+        scripts.mkdir()
+        shutil.copyfile(HERE/'app/export_history.mjs',scripts/'export_history.mjs')
+        ns={'m':'http://schemas.openxmlformats.org/spreadsheetml/2006/main'}
+        def cells(path,sheet):
+            with zipfile.ZipFile(path) as package:
+                strings=[]
+                if 'xl/sharedStrings.xml' in package.namelist():
+                    strings=[''.join(n.itertext()) for n in ElementTree.fromstring(package.read('xl/sharedStrings.xml'))]
+                tree=ElementTree.fromstring(package.read('xl/worksheets/sheet'+str(sheet)+'.xml'))
+                result={}
+                for cell in tree.findall('.//m:sheetData/m:row/m:c',ns):
+                    value=cell.find('m:v',ns)
+                    if cell.get('t')=='inlineStr': result[cell.get('r')]=''.join(cell.find('m:is',ns).itertext())
+                    elif value is not None: result[cell.get('r')]=strings[int(value.text)] if cell.get('t')=='s' else value.text
+                return result
+        with patch('trading.review.closed_trades',return_value=[old,current]):
+            output=export_excel(self.store)
+        summary,ledger=cells(output,1),cells(output,2)
+        self.assertEqual(float(summary['B5']),2)
+        self.assertEqual(float(summary['B6']),.5)
+        self.assertAlmostEqual(float(summary['B7']),15.2)
+        self.assertEqual(float(summary['B29']),1)
+        self.assertEqual(float(summary['B30']),0)
+        self.assertAlmostEqual(float(summary['B31']),-12.4)
+        self.assertAlmostEqual(float(summary['B32']),.4)
+        self.assertAlmostEqual(float(summary['B33']),-2)
+        self.assertEqual(ledger['Q6'],old['strategy_version'])
+        self.assertEqual(ledger['Q7'],current['strategy_version'])
+        self.assertEqual(ledger['A6'],'old-position')
+        self.assertEqual(ledger['A7'],'current-position')
+        with patch('trading.review.closed_trades',return_value=[old]):
+            output=export_excel(self.store,preview=os.environ.get('TRADING_TEST_PREVIEW_DIR'))
+        summary,ledger=cells(output,1),cells(output,2)
+        self.assertEqual(float(summary['B5']),1)
+        self.assertAlmostEqual(float(summary['B7']),27.6)
+        self.assertEqual(float(summary['B29']),0)
+        self.assertEqual(summary['B30'],'자료 없음')
+        self.assertEqual(summary['B31'],'자료 없음')
+        self.assertEqual(ledger['Q6'],old['strategy_version'])
+        with zipfile.ZipFile(output) as package:
+            workbook=ElementTree.fromstring(package.read('xl/workbook.xml'))
+            self.assertEqual([s.get('name') for s in workbook.find('m:sheets',ns)],['요약','거래내역','체결원장','펀딩'])
+
     def test_short_actual_fills_have_correct_net_after_costs(self):
         self.record['direction']=-1
         self.rows=[fill(1,100,self.opened,'SELL','1'),fill(2,101,self.closed,'BUY','1','20')]
@@ -78,7 +195,7 @@ class HistoryTests(unittest.TestCase):
 
     def test_server_exit_is_visible_before_live_management_restart(self):
         self.seeded()
-        self.store.remember({'BTCUSDT':self.record},self.config,NOW)
+        self.store.remember({'BTCUSDT':self.record},NOW)
         row=closed_trades(self.store.snapshot())[0]
         self.assertEqual(row['status'],'확인 완료')
         self.assertAlmostEqual(row['net'],27.6)
@@ -161,10 +278,10 @@ class HistoryTests(unittest.TestCase):
         self.assertIsNone(result['path'])
 
     def test_active_positions_and_unfilled_intents_are_not_completed_trades(self):
-        self.store.remember({'BTCUSDT':self.record},self.config,self.opened)
+        self.store.remember({'BTCUSDT':self.record},self.opened)
         self.store.ingest_fills(self.rows[:2],'BTCUSDT')
         self.assertEqual(closed_trades(self.store.snapshot()),[])
-        self.store.remember({},self.config,self.closed)
+        self.store.remember({},self.closed)
         self.store.bind_entry('tr-owned',100)
         self.assertEqual(self.store.snapshot()['positions'][0]['record']['entry_order_id'],'100')
 

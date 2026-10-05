@@ -1,62 +1,53 @@
-"""One global available-margin allocation policy for every supported symbol."""
+"""The approved four-asset TradingView BASE strategy for the live worker."""
 import json
 import math
 from pathlib import Path
-from trading.signals import validate_entry
-from trading.signals import validate_exit
+from trading.signals import validate_parameters
 
-HERE=Path(__file__).resolve().parent.parent
-LEVERAGE={'BTCUSDT':10,'XRPUSDT':5,'SOLUSDT':5}
+HERE = Path(__file__).resolve().parent.parent
+SYMBOLS = ('BTCUSDT', 'XRPUSDT', 'SOLUSDT', 'HYPEUSDT')
+VERSION = 'TV_BASE_4ASSETS_2X_20261005'
 
 
 def validate(config):
-    required={'schema','orders_enabled','initial_equity','sizing_basis','margin_fraction','margin_mode',
-              'leverage_by_symbol','entry_priority','reserved_order_margin','taker_fee','slippage',
-              'cap_notional','maintenance_margin_rate','daily_loss_limit','timeframe',
-              'entry_parameters','exit_parameters'}
-    if not isinstance(config,dict) or not required<=set(config) or set(config)-required-{'symbol_overrides'}:
-        raise ValueError('unknown/missing portfolio config fields')
-    json.dumps(config,allow_nan=False)
-    if config['schema']!='available_margin_portfolio_v1' or config['orders_enabled'] is not False:
-        raise ValueError('research-only portfolio config required')
-    if config['sizing_basis']!='available_margin' or config['margin_fraction']!=.1 or config['margin_mode']!='isolated':
-        raise ValueError('ALL entries must use 10% of available margin, isolated')
-    allocation=config['leverage_by_symbol']
-    if (not isinstance(allocation,dict) or set(allocation) not in ({'BTCUSDT','XRPUSDT'},set(LEVERAGE))
-            or any(value!=LEVERAGE[symbol] for symbol,value in allocation.items())):
-        raise ValueError('BTC requires 10x; XRP and optional SOL require 5x')
-    priority=config['entry_priority']
-    if not isinstance(priority,list) or len(priority)!=len(allocation) or set(priority)!=set(allocation):
-        raise ValueError('priority must list every active symbol exactly once')
-    for name in ('initial_equity','reserved_order_margin','taker_fee','slippage','cap_notional','maintenance_margin_rate','daily_loss_limit'):
-        v=config[name]
-        if isinstance(v,bool) or not isinstance(v,(int,float)) or not math.isfinite(v): raise ValueError('invalid '+name)
-    if config['initial_equity']<=0 or not 0<=config['reserved_order_margin']<=config['initial_equity']:
-        raise ValueError('invalid capital/reservation')
-    if not 0<=config['taker_fee']<.1 or not 0<=config['slippage']<.1 or config['cap_notional']<=0:
-        raise ValueError('invalid costs/notional cap')
-    if not 0<config['maintenance_margin_rate']<.1 or not 0<config['daily_loss_limit']<=1:
-        raise ValueError('invalid maintenance/daily gate')
-    if config['timeframe']!='4h': raise ValueError('4h signal timeframe required')
-    validate_entry(config['entry_parameters']); validate_exit(config['exit_parameters'])
-    if config['exit_parameters']['management']!='fixed': raise ValueError('portfolio currently supports fixed SL/TP only')
-    overrides=config.get('symbol_overrides',{})
-    if not isinstance(overrides,dict) or not set(overrides)<=set(allocation):
-        raise ValueError('invalid symbol overrides')
-    for override in overrides.values():
-        if not isinstance(override,dict) or set(override)!={'entry_parameters','exit_parameters'}:
-            raise ValueError('symbol override may change entry/exit parameters only')
-        validate_entry(override['entry_parameters']); validate_exit(override['exit_parameters'])
-        if override['exit_parameters']['management']!='fixed':
-            raise ValueError('portfolio currently supports fixed SL/TP only')
+    required = {'schema', 'strategy_version', 'orders_enabled', 'sizing_basis', 'margin_fraction',
+                'margin_mode', 'leverage_by_symbol', 'entry_priority', 'taker_fee',
+                'slippage_ticks', 'maintenance_margin_rate',
+                'timeframe', 'strategy_by_symbol'}
+    if not isinstance(config, dict) or set(config) != required:
+        raise ValueError('unknown/missing live strategy config fields')
+    json.dumps(config, allow_nan=False)
+    if (config['schema'] != 'tradingview_base_mtf_v1' or config['strategy_version'] != VERSION
+            or config['orders_enabled'] is not False):
+        raise ValueError('user-started BASE configuration required')
+    if (config['sizing_basis'] != 'available_margin' or config['margin_fraction'] != .5
+            or config['margin_mode'] != 'isolated' or config['timeframe'] != '4h'
+            or config['entry_priority'] != 'previous_closed_4h_turnover_desc'):
+        raise ValueError('BASE requires 4h, isolated, sequential free margin 50%, turnover priority')
+    if (not isinstance(config['leverage_by_symbol'], dict)
+            or set(config['leverage_by_symbol']) != set(SYMBOLS)
+            or any(isinstance(x, bool) or x != 2 for x in config['leverage_by_symbol'].values())):
+        raise ValueError('all four symbols require 2x leverage')
+    for key in ('taker_fee', 'maintenance_margin_rate', 'slippage_ticks'):
+        value = config[key]
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+            raise ValueError('invalid ' + key)
+    if not 0 <= config['taker_fee'] < .1 or not 0 < config['maintenance_margin_rate'] < .1:
+        raise ValueError('invalid fee/maintenance estimate')
+    if config['slippage_ticks'] != 2:
+        raise ValueError('BASE uses two-tick IOC allowance')
+    if not isinstance(config['strategy_by_symbol'], dict) or set(config['strategy_by_symbol']) != set(SYMBOLS):
+        raise ValueError('exactly four strategy profiles required')
+    for parameters in config['strategy_by_symbol'].values():
+        validate_parameters(parameters)
     return config
 
 
-def load(path=HERE/'strategy.json'):
+def load(path=HERE / 'strategy.json'):
     return validate(json.loads(Path(path).read_text(encoding='utf-8-sig')))
 
 
-def parameters_for(config,symbol):
-    if symbol not in config['leverage_by_symbol']: raise ValueError('unsupported symbol')
-    return config.get('symbol_overrides',{}).get(symbol,
-        {key:config[key] for key in ('entry_parameters','exit_parameters')})
+def parameters_for(config, symbol):
+    if symbol not in config['strategy_by_symbol']:
+        raise ValueError('unsupported symbol')
+    return config['strategy_by_symbol'][symbol]

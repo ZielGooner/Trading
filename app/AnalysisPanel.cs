@@ -2,21 +2,18 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
-using System.Globalization;
 using System.IO;
-using System.Security.Cryptography;
-using System.Text;
 using System.Threading.Tasks;
 using System.Web.Script.Serialization;
 using System.Windows.Forms;
 
 namespace TradingLauncher
 {
-    public sealed class HistoryForm : Form
+    public sealed class AnalysisPanel : UserControl
     {
         private readonly string root;
         private string account;
-        private readonly NumericUpDown days = new NumericUpDown();
+        private readonly NumberField days = new NumberField(1, 365, 30);
         private readonly Button sync = new ModernButton(), excel = new ModernButton(), analyze = new ModernButton();
         private readonly Button cancel = new ModernButton(), login = new ModernButton(), folder = new ModernButton();
         private readonly Label status = new Label(), accountLabel = new Label();
@@ -24,26 +21,27 @@ namespace TradingLauncher
         private readonly Button send = new ModernButton(), newChat = new ModernButton();
         private readonly Panel analysisTab = new Panel(), chatTab = new Panel();
         private readonly Button analysisView = new ModernButton(), chatView = new ModernButton();
-        private FlowLayoutPanel period;
+        private readonly FlowLayoutPanel period;
         private string conversationId, activeAction;
         public string ChatText { get { return conversation.Text; } }
         public string QuestionText { get { return question.Text; } set { question.Text = value; } }
         public bool CanSendQuestion { get { return send.Enabled; } }
         private readonly JavaScriptSerializer json = new JavaScriptSerializer { MaxJsonLength = 4 * 1024 * 1024 };
-        private Process worker;
-        private bool closeAfter, gotResult;
+        private readonly ReviewWorker worker = new ReviewWorker();
+        private bool gotResult;
         private string lastExcel;
-        public int PeriodDays { get { return (int)days.Value; } }
+        public event EventHandler OperationCompleted;
+        public int PeriodDays { get { return days.Value; } }
         public string ReportText { get { return report.Text; } }
-        public bool IsBusy { get { return worker != null; } }
-        public HistoryForm(string projectRoot, string currentAccount = null)
+        public bool IsBusy { get { return worker.IsBusy; } }
+        public bool AutoDetectAccount { get; set; }
+        public AnalysisPanel(string projectRoot, string currentAccount = null)
         {
             root = Path.GetFullPath(projectRoot);
             account = currentAccount;
-            Text = "거래 내역 · Codex 전략 분석";
-            ClientSize = new Size(1080, 780);
-            MinimumSize = new Size(980, 700);
-            StartPosition = FormStartPosition.CenterParent;
+            AutoDetectAccount = true;
+            Text = "분석";
+            Dock = DockStyle.Fill;
             Font = UiTheme.Font(10F);
             BackColor = UiTheme.Background;
             ForeColor = UiTheme.Text;
@@ -56,20 +54,19 @@ namespace TradingLauncher
             layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 52));
             Controls.Add(layout);
-            var title = UiTheme.Label("거래 내역과 전략 피드백", 22F, UiTheme.Text, FontStyle.Bold);
+            var title = UiTheme.Label("거래 분석", 22F, UiTheme.Text, FontStyle.Bold);
             layout.Controls.Add(title, 0, 0);
-            period = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false };
-            period.Controls.Add(new Label { Text = "최근", AutoSize = true, Padding = new Padding(0, 7, 4, 0) });
-            days.Minimum = 1; days.Maximum = 365; days.Value = 30; days.Width = 76;
-            days.BackColor = UiTheme.Surface; days.ForeColor = UiTheme.Text; days.Margin = new Padding(0, 4, 3, 0);
+            period = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false, Font = UiTheme.Font(9F) };
+            period.Controls.Add(new Label { Text = "최근", AutoSize = true, ForeColor = UiTheme.Muted, Padding = new Padding(0, 9, 4, 0) });
+            days.Name = "AnalysisPeriodDays"; days.Margin = new Padding(0, 2, 3, 0);
             period.Controls.Add(days);
-            period.Controls.Add(new Label { Text = "일", AutoSize = true, Padding = new Padding(0, 7, 14, 0) });
+            period.Controls.Add(new Label { Text = "일", AutoSize = true, ForeColor = UiTheme.Muted, Padding = new Padding(0, 9, 14, 0) });
             foreach (int preset in new int[] { 7, 30, 90 })
             {
                 int selected = preset;
                 var button = new ModernButton();
                 UiTheme.StyleButton(button, preset.ToString() + "일", 65, false);
-                button.Height = 32;
+                button.Height = 32; button.Margin = new Padding(0, 2, 8, 0);
                 button.Click += delegate { days.Value = selected; };
                 period.Controls.Add(button);
             }
@@ -100,9 +97,10 @@ namespace TradingLauncher
             var viewButtons = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false };
             UiTheme.StyleButton(analysisView, "분석 보고서", 135, true);
             UiTheme.StyleButton(chatView, "Codex 대화", 135, false);
+            analysisView.Name = "AnalysisReportTab"; chatView.Name = "AnalysisChatTab";
             viewButtons.Controls.AddRange(new Control[] { analysisView, chatView });
             views.Controls.Add(viewButtons, 0, 0);
-            var content = new Panel { Dock = DockStyle.Fill, BackColor = UiTheme.Surface };
+            var content = UiTheme.Card(); content.Name = "AnalysisContentCard"; content.Padding = new Padding(1);
             analysisTab.Dock = chatTab.Dock = DockStyle.Fill;
             analysisTab.Padding = chatTab.Padding = new Padding(12);
             analysisTab.BackColor = chatTab.BackColor = UiTheme.Surface;
@@ -121,7 +119,8 @@ namespace TradingLauncher
             conversation.Dock = DockStyle.Fill; conversation.Multiline = true; conversation.ReadOnly = true;
             conversation.ScrollBars = ScrollBars.Vertical; conversation.BorderStyle = BorderStyle.None;
             conversation.BackColor = UiTheme.Surface; conversation.ForeColor = UiTheme.Text; conversation.Font = UiTheme.Font(10F);
-            chatLayout.Controls.Add(conversation, 0, 1);
+            var conversationBox = UiTheme.TextArea(conversation, UiTheme.Background); conversationBox.Name = "ConversationCard";
+            chatLayout.Controls.Add(conversationBox, 0, 1);
             var composer = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 2, Padding = new Padding(0, 10, 0, 0) };
             composer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
             composer.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 126));
@@ -131,7 +130,8 @@ namespace TradingLauncher
             question.Dock = DockStyle.Fill; question.ScrollBars = ScrollBars.Vertical;
             question.BackColor = UiTheme.Background; question.ForeColor = UiTheme.Text;
             question.Font = UiTheme.Font(10F); question.AccessibleName = "Codex에게 보낼 질문";
-            composer.Controls.Add(question, 0, 0);
+            var questionBox = UiTheme.TextArea(question, UiTheme.Background); questionBox.Name = "QuestionInputCard";
+            composer.Controls.Add(questionBox, 0, 0);
             var chatButtons = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, WrapContents = false };
             UiTheme.StyleButton(send, "질문 보내기", 118, true); send.Height = 32;
             UiTheme.StyleButton(newChat, "새 대화", 118, false); newChat.Height = 30;
@@ -172,27 +172,25 @@ namespace TradingLauncher
                 Directory.CreateDirectory(path); OpenPath(path);
             };
             login.Click += delegate { Login(); };
-            Shown += async delegate
+            UpdateButtons();
+        }
+        public void RequestCancellation() { CancelOperation(); }
+        public void SetAccount(string value)
+        {
+            if (IsBusy) return;
+            if (!string.IsNullOrEmpty(value) && account != value)
             {
-                IdentifyAccount();
-                if (account != null) await RunOperation("status", false);
-                else { status.Text = "먼저 실계좌 화면에서 API를 설정한 뒤 내역 새로고침을 누르세요."; UpdateButtons(); }
-            };
-            FormClosing += delegate(object sender, FormClosingEventArgs e)
-            {
-                if (IsBusy) { e.Cancel = true; closeAfter = true; CancelOperation(); }
-            };
+                account = value; ResetConversation(); report.Text = "계정이 변경되었습니다. Codex 분석을 눌러 확인하세요.";
+            }
+            try { IdentifyAccount(); } catch (Exception error) { status.Text = "계정 확인 실패: " + error.Message; }
             UpdateButtons();
         }
 
         private void IdentifyAccount()
         {
-            if (!File.Exists(CredentialStore.FilePath(root))) return;
+            if (!AutoDetectAccount) return;
             string previousAccount = account;
-            var credentials = CredentialStore.Load(root);
-            using (var hash = SHA256.Create())
-                account = BitConverter.ToString(hash.ComputeHash(Encoding.UTF8.GetBytes((string)credentials["key"]))).Replace("-", "").ToLowerInvariant().Substring(0, 24);
-            credentials.Clear();
+            account = ReviewWorker.IdentifyAccount(root, account);
             if (previousAccount != account)
             {
                 ResetConversation(); report.Text = "계정이 변경되었습니다. 선택 계정의 내역을 다시 확인하세요.";
@@ -221,7 +219,7 @@ namespace TradingLauncher
         {
             bool idle = !IsBusy;
             sync.Enabled = login.Enabled = days.Enabled = idle;
-            if (period != null) period.Enabled = idle;
+            period.Enabled = idle;
             send.Enabled = idle && account != null && !string.IsNullOrWhiteSpace(question.Text);
             question.ReadOnly = !idle; newChat.Enabled = idle;
             excel.Enabled = analyze.Enabled = idle && account != null;
@@ -250,11 +248,10 @@ namespace TradingLauncher
         }
         private void CancelOperation()
         {
-            if (worker == null) return;
-            try { worker.StandardInput.WriteLine("{\"action\":\"cancel\"}"); worker.StandardInput.Flush(); status.Text = "진행 중인 저장·분석 작업을 취소하고 있습니다."; }
-            catch (Exception) { }
+            if (!IsBusy) return;
+            worker.Cancel(); status.Text = "진행 중인 저장·분석 작업을 취소하고 있습니다.";
         }
-        public void SetPeriod(int value) { days.Value = Math.Max(1, Math.Min(365, value)); }
+        public void SetPeriod(int value) { days.Value = value; }
         public void Receive(string line)
         {
             var value = json.Deserialize<Dictionary<string, object>>(line);
@@ -287,29 +284,6 @@ namespace TradingLauncher
             if (value.ContainsKey("path") && value["path"] != null && !value.ContainsKey("answer")) status.Text += " · 피드백 파일 저장됨";
             UpdateButtons();
         }
-        public static string SerializeRequest(Dictionary<string, object> request)
-        {
-            var serializer = new JavaScriptSerializer { MaxJsonLength = 4 * 1024 * 1024 };
-            string serialized = serializer.Serialize(request);
-            var wire = new StringBuilder(serialized.Length);
-            // .NET Framework stdin uses the Windows code page. ASCII JSON escapes
-            // preserve every UTF-16 code unit, including both halves of emoji.
-            foreach (char character in serialized)
-            {
-                if (character > 127)
-                    wire.Append("\\u").Append(((int)character).ToString("x4", CultureInfo.InvariantCulture));
-                else wire.Append(character);
-            }
-            return wire.ToString();
-        }
-        public static ProcessStartInfo CreateWorkerStartInfo(string projectRoot)
-        {
-            return new ProcessStartInfo(Path.Combine(projectRoot, ".venv", "Scripts", "python.exe"), "-B -u -X utf8 -m trading.review") {
-                WorkingDirectory = projectRoot, UseShellExecute = false, CreateNoWindow = true,
-                RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true,
-                StandardOutputEncoding = Encoding.UTF8, StandardErrorEncoding = Encoding.UTF8
-            };
-        }
         private async Task RunOperation(string action, bool openExcel)
         {
             if (IsBusy) return;
@@ -334,11 +308,7 @@ namespace TradingLauncher
                     credentials.Clear();
                 }
                 if (account == null && action != "sync") throw new InvalidOperationException("API 설정과 내역 새로고침을 먼저 실행하세요.");
-                var info = CreateWorkerStartInfo(root);
-                worker = new Process { StartInfo = info };
                 gotResult = false;
-                if (!worker.Start()) throw new InvalidOperationException("거래 분석 프로세스를 실행하지 못했습니다.");
-                UpdateButtons();
                 status.Text = action == "chat" ? "Astra Extra High 답변을 준비합니다…" :
                     action == "analyze" ? "저장 내역을 기준으로 Codex 분석을 준비합니다…" : "거래 내역을 확인하고 있습니다…";
                 if (action == "analyze")
@@ -346,48 +316,32 @@ namespace TradingLauncher
                     ShowConversation(false);
                     report.Text = "Astra Extra High 분석 중입니다. 완료되면 결과가 여기에 표시됩니다.";
                 }
-                worker.StandardInput.WriteLine(SerializeRequest(request)); worker.StandardInput.Flush();
-                request.Clear();
-                Task<string> errors = worker.StandardError.ReadToEndAsync();
-                string line;
-                while ((line = await worker.StandardOutput.ReadLineAsync()) != null) Receive(line);
-                await Task.Run(delegate { worker.WaitForExit(); });
-                string errorText = await errors;
-                if (!gotResult) throw new InvalidOperationException("처리 결과를 받지 못했습니다. " + (string.IsNullOrWhiteSpace(errorText) ? "" : "실행 환경을 확인하세요."));
-                if (worker.ExitCode == 0 && openExcel && lastExcel != null && File.Exists(lastExcel)) OpenPath(lastExcel);
+                int exitCode = await worker.RunAsync(root, request, Receive, UpdateButtons);
+                if (IsDisposed) return;
+                if (!gotResult) throw new InvalidOperationException("처리 결과를 받지 못했습니다. 실행 환경을 확인하세요.");
+                if (exitCode == 0 && openExcel && lastExcel != null && File.Exists(lastExcel)) OpenPath(lastExcel);
             }
             catch (Exception error)
             {
-                status.Text = "작업 실패: " + error.Message;
-                if (action == "chat") AppendConversation("[답변 실패] " + status.Text);
-                else report.Text = status.Text;
+                if (!IsDisposed)
+                {
+                    status.Text = "작업 실패: " + error.Message;
+                    if (action == "chat") AppendConversation("[답변 실패] " + status.Text);
+                    else report.Text = status.Text;
+                }
             }
+            finally
             {
                 if (request != null) request.Clear();
-                if (worker != null)
-                {
-                    try
-                    {
-                        if (!worker.HasExited)
-                        {
-                            worker.StandardInput.WriteLine("{\"action\":\"cancel\"}");
-                            worker.StandardInput.Flush();
-                            await Task.Run(delegate { worker.WaitForExit(); });
-                        }
-                    }
-                    catch (InvalidOperationException) { }
-                    worker.Dispose(); worker = null;
-                }
                 activeAction = null;
-                UpdateButtons();
-                if (action == "chat") question.Focus();
-                if (closeAfter) Close();
+                if (!IsDisposed)
+                {
+                    UpdateButtons(); if (action == "chat") question.Focus();
+                    if (OperationCompleted != null) OperationCompleted(this, EventArgs.Empty);
+                }
             }
         }
-        protected override void OnHandleCreated(EventArgs e)
-        {
-            base.OnHandleCreated(e); UiTheme.DarkTitleBar(this);
-        }
+        protected override void Dispose(bool disposing) { if (disposing) worker.Dispose(); base.Dispose(disposing); }
     }
 }
 

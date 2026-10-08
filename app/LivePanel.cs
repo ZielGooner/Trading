@@ -64,10 +64,14 @@ namespace TradingLauncher
             var secretField = UiTheme.Card();
             secretField.Dock = DockStyle.None;
             secretField.SetBounds(30, 284, 620, 44);
-            var key = new TextBox { UseSystemPasswordChar = true, Location = new Point(14, 11), Width = 590, BorderStyle = BorderStyle.None, BackColor = UiTheme.Surface, ForeColor = UiTheme.Text, Font = UiTheme.Font(11F), TabIndex = 0 };
-            var secret = new TextBox { UseSystemPasswordChar = true, Location = new Point(14, 11), Width = 590, BorderStyle = BorderStyle.None, BackColor = UiTheme.Surface, ForeColor = UiTheme.Text, Font = UiTheme.Font(11F), TabIndex = 1 };
+            var key = new TextBox { UseSystemPasswordChar = true, BorderStyle = BorderStyle.None, BackColor = UiTheme.Surface, ForeColor = UiTheme.Text, Font = UiTheme.Font(11F), TabIndex = 0 };
+            var secret = new TextBox { UseSystemPasswordChar = true, BorderStyle = BorderStyle.None, BackColor = UiTheme.Surface, ForeColor = UiTheme.Text, Font = UiTheme.Font(11F), TabIndex = 1 };
             keyField.Controls.Add(key);
             secretField.Controls.Add(secret);
+            keyField.HighlightFocus = secretField.HighlightFocus = true;
+            keyField.Resize += delegate { UiTheme.CenterInputText(key, keyField.ClientSize, 14, 14); };
+            secretField.Resize += delegate { UiTheme.CenterInputText(secret, secretField.ClientSize, 14, 14); };
+            UiTheme.CenterInputText(key, keyField.ClientSize, 14, 14); UiTheme.CenterInputText(secret, secretField.ClientSize, 14, 14);
             var note = UiTheme.Label("키는 이 Windows 사용자 계정으로 암호화되어 로컬에 저장됩니다.", 9F, UiTheme.Muted, FontStyle.Regular);
             note.Location = new Point(30, 345);
             var cancel = new ModernButton { Location = new Point(402, 405), DialogResult = DialogResult.Cancel, TabIndex = 3 };
@@ -101,7 +105,9 @@ namespace TradingLauncher
         private readonly string root;
         private readonly Button settings = new ModernButton(), connect = new ModernButton(), disconnect = new ModernButton(), start = new ModernButton(), stop = new ModernButton();
         private readonly Label status = new Label(), info = new Label();
-        private readonly Label connectionBadge = new Label(), emptyPositions = new Label(), emptyLog = new Label();
+        private readonly Label emptyPositions = new Label(), emptyLog = new Label();
+        private string connectionText;
+        private Color connectionColor;
         private readonly Label[] values = new Label[3];
         private readonly DataGridView positions = new DataGridView();
         private readonly TextBox log = new TextBox();
@@ -109,12 +115,16 @@ namespace TradingLauncher
         private readonly JavaScriptSerializer json = new JavaScriptSerializer();
         private Process worker;
         private string accountId;
-        private HistoryForm historyWindow;
         private bool closing, staleStopSent;
         private string lastFault;
         private DateTime lastMessage;
         public event EventHandler ShutdownCompleted;
         public bool HasWorker { get { return worker != null; } }
+        public string AccountId { get { return accountId; } }
+        public string ConnectionText { get { return connectionText; } }
+        public Color ConnectionColor { get { return connectionColor; } }
+        public event EventHandler ConnectionChanged;
+        public event EventHandler HistoryUpdated;
         public bool StartEnabled { get { return start.Enabled; } }
         public string WalletText { get { return values[0].Text; } }
         public string StatusText { get { return status.Text; } }
@@ -127,38 +137,13 @@ namespace TradingLauncher
             BackColor = UiTheme.Background;
             ForeColor = UiTheme.Text;
             Font = UiTheme.Font(10F);
-            var layout = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(12, 8, 12, 0), ColumnCount = 1, RowCount = 4, BackColor = UiTheme.Background, Margin = Padding.Empty };
+            var layout = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(16, 12, 16, 0), ColumnCount = 1, RowCount = 3, BackColor = UiTheme.Background, Margin = Padding.Empty };
             layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 54));
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 108));
             layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 52));
             Controls.Add(layout);
-            var header = new Panel { Dock = DockStyle.Fill, Margin = Padding.Empty };
-            var title = UiTheme.Label("USDⓈ-M 선물", 22F, UiTheme.Text, FontStyle.Bold);
-            title.Location = new Point(0, 0);
-            var subtitle = UiTheme.Label("시장 차트 · 실계좌 자산 · 자동매매", 8F, UiTheme.Muted, FontStyle.Regular);
-            subtitle.Location = new Point(238, 19);
-            header.Controls.AddRange(new Control[] { title, subtitle });
-            connectionBadge.Size = new Size(180, 30);
-            connectionBadge.TextAlign = ContentAlignment.MiddleRight;
-            connectionBadge.Font = UiTheme.Font(9F, FontStyle.Bold);
-            connectionBadge.Anchor = AnchorStyles.Top | AnchorStyles.Right;
-            header.Controls.Add(connectionBadge);
-            header.Resize += delegate { connectionBadge.Location = new Point(Math.Max(0, header.ClientSize.Width - 180), 5); };
             SetConnectionBadge("연결 안 됨", UiTheme.Muted);
-            var historyButton = new ModernButton { Anchor = AnchorStyles.Top | AnchorStyles.Right };
-            UiTheme.StyleButton(historyButton, "거래 내역 · 분석", 170, false);
-            historyButton.Height = 34;
-            header.Controls.Add(historyButton);
-            header.Resize += delegate { historyButton.Location = new Point(Math.Max(0, header.ClientSize.Width - 365), 3); };
-            historyButton.Click += delegate
-            {
-                if (historyWindow == null || historyWindow.IsDisposed) historyWindow = new HistoryForm(root, accountId);
-                if (!historyWindow.Visible) historyWindow.Show(FindForm());
-                historyWindow.Activate();
-            };
-            layout.Controls.Add(header, 0, 0);
             SetupButton(settings, "API 설정", 124, false);
             SetupButton(connect, "실계좌 연결", 254, true);
             SetupButton(disconnect, "연결 해제", 124, false);
@@ -183,7 +168,7 @@ namespace TradingLauncher
                 card.Margin = new Padding(0, 0, i == 2 ? 0 : 8, 8);
                 metrics.Controls.Add(card, i, 0);
             }
-            layout.Controls.Add(metrics, 0, 1);
+            layout.Controls.Add(metrics, 0, 0);
 
             var main = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1, Margin = Padding.Empty };
             main.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
@@ -193,8 +178,9 @@ namespace TradingLauncher
             market.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
             market.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
             market.RowStyles.Add(new RowStyle(SizeType.Absolute, 190));
-            var chart = new MarketChart(chartFeed ?? new BinanceChartFeed()) { Dock = DockStyle.Fill, Margin = new Padding(0, 0, 0, 8) };
-            market.Controls.Add(chart, 0, 0);
+            var chart = new MarketChart(chartFeed ?? new BinanceChartFeed()) { Dock = DockStyle.Fill, Margin = Padding.Empty };
+            var chartCard = UiTheme.Card(); chartCard.Name = "MarketChartCard"; chartCard.Padding = new Padding(1); chartCard.Margin = new Padding(0, 0, 0, 8); chartCard.Controls.Add(chart);
+            market.Controls.Add(chartCard, 0, 0);
             main.Controls.Add(market, 0, 0);
 
             var sidebar = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 2, Margin = Padding.Empty };
@@ -231,14 +217,15 @@ namespace TradingLauncher
             actionSection.Margin = new Padding(0, 0, 0, 8);
             sidebar.Controls.Add(actionSection, 0, 0);
             main.Controls.Add(sidebar, 1, 0);
-            layout.Controls.Add(main, 0, 2);
+            layout.Controls.Add(main, 0, 1);
             positions.Dock = DockStyle.Fill;
             UiTheme.StyleGrid(positions);
-            foreach (string name in new string[] { "종목", "포지션 수량", "평균 진입가", "미실현 손익", "프로그램 관리" }) positions.Columns.Add(name, name);
+            foreach (string name in new string[] { "심볼", "방향", "수량", "평균 진입가", "미실현 손익", "프로그램 관리" }) positions.Columns.Add(name, name);
             positions.Columns[0].FillWeight = 85;
-            positions.Columns[4].FillWeight = 112;
-            for (int i = 1; i <= 3; i++) positions.Columns[i].DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleRight;
-            var positionsHost = new Panel { Dock = DockStyle.Fill, BackColor = UiTheme.Surface };
+            positions.Columns[1].FillWeight = 55;
+            positions.Columns[5].FillWeight = 112;
+            for (int i = 2; i <= 4; i++) positions.Columns[i].DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleRight;
+            var positionsHost = UiTheme.Card(); positionsHost.Name = "PositionsGridCard"; positionsHost.Padding = new Padding(1);
             positionsHost.Controls.Add(positions);
             emptyPositions.TextAlign = ContentAlignment.MiddleCenter;
             emptyPositions.Font = UiTheme.Font(9F);
@@ -251,7 +238,7 @@ namespace TradingLauncher
             positionSection.Margin = Padding.Empty;
             market.Controls.Add(positionSection, 0, 1);
             UiTheme.StyleLog(log);
-            var logHost = new Panel { Dock = DockStyle.Fill, BackColor = UiTheme.Surface };
+            var logHost = UiTheme.Card(); logHost.Name = "ActivityLogCard"; logHost.Padding = new Padding(8);
             logHost.Controls.Add(log);
             emptyLog.Text = "연결과 매매 활동이\n여기에 표시됩니다.";
             emptyLog.Dock = DockStyle.Fill;
@@ -267,7 +254,7 @@ namespace TradingLauncher
             status.Dock = DockStyle.Fill; status.Padding = new Padding(2, 7, 0, 0); status.Font = UiTheme.Font(8F); status.ForeColor = UiTheme.Muted;
             status.Margin = Padding.Empty;
             status.Text = "연결 안 됨 · API 설정 후 실계좌 연결을 누르세요. 연결만으로 주문하지 않습니다.";
-            layout.Controls.Add(status, 0, 3);
+            layout.Controls.Add(status, 0, 2);
             ResetControls();
             watchdog.Interval = 1000;
             watchdog.Tick += delegate
@@ -290,14 +277,15 @@ namespace TradingLauncher
         }
         private void SetConnectionBadge(string text, Color color)
         {
-            connectionBadge.Text = "●  " + text;
-            connectionBadge.ForeColor = color;
+            connectionText = "●  " + text;
+            connectionColor = color;
+            if (ConnectionChanged != null) ConnectionChanged(this, EventArgs.Empty);
         }
         private void SetEmptyPositions(bool connected)
         {
             emptyPositions.Text = connected ? "보유 중인 포지션이 없습니다.\n포지션이 생기면 이곳에 표시됩니다." : "연결된 계좌가 없습니다.\n실계좌에 연결하면 보유 포지션을 확인할 수 있어요.";
             emptyPositions.Visible = positions.Rows.Count == 0;
-            if (emptyPositions.Visible) emptyPositions.BringToFront();
+            if (positions.Rows.Count == 0) emptyPositions.BringToFront();
         }
         private void ResetControls()
         {
@@ -377,6 +365,7 @@ namespace TradingLauncher
                 {
                     if (value.ContainsKey("account_id")) accountId = Convert.ToString(value["account_id"]);
                     AppendLog(Convert.ToString(value["message"]));
+                    if (HistoryUpdated != null) HistoryUpdated(this, EventArgs.Empty);
                     return;
                 }
                 if ((string)value["type"] == "log") { AppendLog((string)value["message"]); return; }
@@ -398,11 +387,13 @@ namespace TradingLauncher
                     foreach (object item in (System.Collections.IEnumerable)value["positions"])
                     {
                         var row = (Dictionary<string, object>)item;
-                        int index = positions.Rows.Add(row["symbol"], row["quantity"], row["entry"], row["unrealized"], Convert.ToBoolean(row["managed"]) ? (value.ContainsKey("management_enabled") && Convert.ToBoolean(value["management_enabled"]) ? "관리 중" : "재시작 대기") : "외부 포지션");
+                        decimal quantity = Convert.ToDecimal(row["quantity"], CultureInfo.InvariantCulture);
+                        int index = positions.Rows.Add(row["symbol"], quantity > 0 ? "long" : quantity < 0 ? "short" : "—", Math.Abs(quantity).ToString("G", CultureInfo.InvariantCulture), row["entry"], row["unrealized"], Convert.ToBoolean(row["managed"]) ? (value.ContainsKey("management_enabled") && Convert.ToBoolean(value["management_enabled"]) ? "관리 중" : "재시작 대기") : "외부 포지션");
+                        positions.Rows[index].Cells[1].Style.ForeColor = quantity > 0 ? UiTheme.Positive : quantity < 0 ? UiTheme.Negative : UiTheme.Muted;
                         decimal profit;
                         if (decimal.TryParse(Convert.ToString(row["unrealized"], CultureInfo.InvariantCulture), NumberStyles.Any, CultureInfo.InvariantCulture, out profit))
-                            positions.Rows[index].Cells[3].Style.ForeColor = profit > 0 ? UiTheme.Positive : profit < 0 ? UiTheme.Negative : UiTheme.Text;
-                        positions.Rows[index].Cells[4].Style.ForeColor = Convert.ToBoolean(row["managed"]) ? UiTheme.Accent : UiTheme.Muted;
+                            positions.Rows[index].Cells[4].Style.ForeColor = profit > 0 ? UiTheme.Positive : profit < 0 ? UiTheme.Negative : UiTheme.Text;
+                        positions.Rows[index].Cells[5].Style.ForeColor = Convert.ToBoolean(row["managed"]) ? UiTheme.Accent : UiTheme.Muted;
                     }
                     positions.ClearSelection();
                 }

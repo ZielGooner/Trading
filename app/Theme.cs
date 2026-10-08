@@ -18,6 +18,7 @@ namespace TradingLauncher
         public static readonly Color Positive = Color.FromArgb(14, 203, 129);
         public static readonly Color Negative = Color.FromArgb(246, 70, 93);
         public static readonly Color Warning = Accent;
+        public const int CornerRadius = 8;
 
         [DllImport("dwmapi.dll")]
         private static extern int DwmSetWindowAttribute(IntPtr window, int attribute, ref int value, int size);
@@ -30,12 +31,36 @@ namespace TradingLauncher
         }
 
         public static Font Font(float size) { return Font(size, FontStyle.Regular); }
-        public static Font Font(float size, FontStyle style) { return new Font("맑은 고딕", size, style, GraphicsUnit.Point); }
+        public static Font Font(float size, FontStyle style) { return Typography.Create(size, style); }
         public static Label Label(string text, float size, Color color, FontStyle style)
         {
             return new Label { Text = text, AutoSize = true, ForeColor = color, BackColor = Color.Transparent, Font = Font(size, style) };
         }
         public static SurfacePanel Card() { return new SurfacePanel { Dock = DockStyle.Fill, BackColor = Surface }; }
+        public static SurfacePanel TextArea(TextBox text, Color background)
+        {
+            var panel = Card(); panel.BackColor = background; panel.Padding = new Padding(10, 8, 10, 8);
+            panel.HighlightFocus = !text.ReadOnly;
+            text.Dock = DockStyle.Fill; text.BorderStyle = BorderStyle.None; text.BackColor = background; text.Margin = Padding.Empty;
+            panel.Controls.Add(text); return panel;
+        }
+        public static void CenterInputText(TextBox text, Size size, int left, int right)
+        {
+            if (text == null) return;
+            // Match native GDI text metrics instead of TextBox.PreferredHeight,
+            // whose extra line space moves Pretendard's visible text upward.
+            text.AutoSize = false;
+            int height = TextRenderer.MeasureText("Ag한", text.Font, Size.Empty, TextFormatFlags.NoPadding | TextFormatFlags.SingleLine).Height;
+            height = Math.Max(1, Math.Min(height, size.Height - 4));
+            text.SetBounds(left, Math.Max(2, (size.Height - height + 1) / 2), Math.Max(1, size.Width - left - right), height);
+        }
+        public static void RoundRegion(Control control)
+        {
+            Region old = control.Region;
+            if (control.Width < 2 || control.Height < 2) control.Region = null;
+            else using (var path = Round(new Rectangle(0, 0, control.Width, control.Height), CornerRadius)) control.Region = new Region(path);
+            if (old != null) old.Dispose();
+        }
 
         public static void StyleButton(Button button, string text, int width, bool primary)
         {
@@ -103,19 +128,6 @@ namespace TradingLauncher
             log.Text = text;
             log.Select(0, 0);
             log.ScrollToCaret();
-        }
-
-        public static Panel Header(string eyebrow, string title, string subtitle)
-        {
-            var panel = new Panel { Dock = DockStyle.Fill, Margin = Padding.Empty };
-            var overline = Label(eyebrow, 8F, Accent, FontStyle.Bold);
-            overline.Location = new Point(0, 0);
-            var heading = Label(title, 20F, Text, FontStyle.Bold);
-            heading.Location = new Point(-2, 17);
-            var description = Label(subtitle, 9F, Muted, FontStyle.Regular);
-            description.Location = new Point(0, 56);
-            panel.Controls.AddRange(new Control[] { overline, heading, description });
-            return panel;
         }
 
         public static SurfacePanel Metric(string title, Label value, string footnote)
@@ -187,7 +199,7 @@ namespace TradingLauncher
 
         internal static GraphicsPath Round(Rectangle rectangle, int radius)
         {
-            int d = radius * 2;
+            int d = Math.Max(1, Math.Min(radius * 2, Math.Min(rectangle.Width, rectangle.Height)));
             var path = new GraphicsPath();
             path.AddArc(rectangle.Left, rectangle.Top, d, d, 180, 90);
             path.AddArc(rectangle.Right - d, rectangle.Top, d, d, 270, 90);
@@ -198,17 +210,49 @@ namespace TradingLauncher
         }
     }
 
+    internal class InputField : UserControl
+    {
+        private bool hovered;
+        protected virtual bool Highlighted { get { return false; } }
+        protected InputField()
+        {
+            DoubleBuffered = true; ResizeRedraw = true; Size = new Size(130, 32);
+            BackColor = UiTheme.Elevated; ForeColor = UiTheme.Text; Font = UiTheme.Font(9F); Cursor = Cursors.Hand;
+        }
+        protected override void OnMouseEnter(EventArgs e) { hovered = true; Invalidate(); base.OnMouseEnter(e); }
+        protected override void OnMouseLeave(EventArgs e) { hovered = false; Invalidate(); base.OnMouseLeave(e); }
+        protected override void OnEnter(EventArgs e) { Invalidate(); base.OnEnter(e); }
+        protected override void OnLeave(EventArgs e) { Invalidate(); base.OnLeave(e); }
+        protected override void OnEnabledChanged(EventArgs e) { Invalidate(); base.OnEnabledChanged(e); }
+        protected override void OnSizeChanged(EventArgs e) { base.OnSizeChanged(e); UiTheme.RoundRegion(this); }
+        protected override void OnPaintBackground(PaintEventArgs e) { e.Graphics.Clear(Parent == null ? UiTheme.Background : Parent.BackColor); }
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            base.OnPaint(e);
+            if (Width < 12 || Height < 12) return;
+            e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+            Color border = Enabled && (hovered || ContainsFocus || Highlighted) ? UiTheme.Accent : UiTheme.Border;
+            using (var path = UiTheme.Round(new Rectangle(0, 0, Width - 1, Height - 1), UiTheme.CornerRadius))
+            using (var brush = new SolidBrush(BackColor))
+            using (var pen = new Pen(border)) { e.Graphics.FillPath(brush, path); e.Graphics.DrawPath(pen, path); }
+        }
+    }
+
     internal sealed class SurfacePanel : Panel
     {
+        public bool HighlightFocus { get; set; }
         public SurfacePanel() { DoubleBuffered = true; ResizeRedraw = true; }
+        protected override void OnSizeChanged(EventArgs e) { base.OnSizeChanged(e); UiTheme.RoundRegion(this); }
+        protected override void OnEnter(EventArgs e) { if (HighlightFocus) Invalidate(); base.OnEnter(e); }
+        protected override void OnLeave(EventArgs e) { if (HighlightFocus) Invalidate(); base.OnLeave(e); }
         protected override void OnPaintBackground(PaintEventArgs e)
         {
             e.Graphics.Clear(Parent == null ? UiTheme.Background : Parent.BackColor);
             if (Width < 22 || Height < 22) return;
             e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
-            using (var path = UiTheme.Round(new Rectangle(0, 0, Width - 1, Height - 1), 5))
+            using (var path = UiTheme.Round(new Rectangle(0, 0, Width - 1, Height - 1), UiTheme.CornerRadius))
             using (var fill = new SolidBrush(BackColor))
-            using (var pen = new Pen(UiTheme.Border))
+            using (var pen = new Pen(HighlightFocus && ContainsFocus ? UiTheme.Accent : UiTheme.Border))
             { e.Graphics.FillPath(fill, path); e.Graphics.DrawPath(pen, path); }
         }
     }
@@ -217,6 +261,7 @@ namespace TradingLauncher
     {
         private bool hovered;
         public ModernButton() { DoubleBuffered = true; SetStyle(ControlStyles.UserPaint | ControlStyles.ResizeRedraw, true); }
+        protected override void OnSizeChanged(EventArgs e) { base.OnSizeChanged(e); UiTheme.RoundRegion(this); }
         protected override void OnMouseEnter(EventArgs e) { hovered = true; Invalidate(); base.OnMouseEnter(e); }
         protected override void OnMouseLeave(EventArgs e) { hovered = false; Invalidate(); base.OnMouseLeave(e); }
         protected override void OnEnabledChanged(EventArgs e) { Invalidate(); base.OnEnabledChanged(e); }
@@ -225,7 +270,7 @@ namespace TradingLauncher
             e.Graphics.Clear(Parent == null ? UiTheme.Background : Parent.BackColor);
             e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
             Color fill = !Enabled ? UiTheme.Surface : hovered ? FlatAppearance.MouseOverBackColor : BackColor;
-            using (var path = UiTheme.Round(new Rectangle(0, 0, Width - 1, Height - 1), 5))
+            using (var path = UiTheme.Round(new Rectangle(0, 0, Width - 1, Height - 1), UiTheme.CornerRadius))
             using (var brush = new SolidBrush(fill))
             using (var pen = new Pen(!Enabled ? UiTheme.Border : FlatAppearance.BorderColor))
             {
@@ -234,22 +279,6 @@ namespace TradingLauncher
             }
             TextRenderer.DrawText(e.Graphics, Text, Font, ClientRectangle, Enabled ? ForeColor : Color.FromArgb(94, 102, 115), TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
             if (Focused && ShowFocusCues) ControlPaint.DrawFocusRectangle(e.Graphics, Rectangle.Inflate(ClientRectangle, -5, -5), UiTheme.Accent, fill);
-        }
-    }
-
-    internal sealed class BrandMark : Control
-    {
-        public BrandMark() { Size = new Size(36, 36); DoubleBuffered = true; }
-        protected override void OnPaint(PaintEventArgs e)
-        {
-            e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
-            using (var brush = new SolidBrush(UiTheme.Accent))
-            using (var pen = new Pen(UiTheme.Accent, 2F))
-            {
-                e.Graphics.DrawLine(pen, 8, 15, 8, 32); e.Graphics.FillRectangle(brush, 4, 20, 8, 7);
-                e.Graphics.DrawLine(pen, 19, 7, 19, 28); e.Graphics.FillRectangle(brush, 15, 12, 8, 11);
-                e.Graphics.DrawLine(pen, 30, 2, 30, 21); e.Graphics.FillRectangle(brush, 26, 5, 8, 10);
-            }
         }
     }
 

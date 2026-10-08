@@ -52,6 +52,8 @@ GitHub 인증이 요청되면 Git의 인증 창에서 진행합니다. 인증 �
 
 ## 이후 변경 사항 업로드
 
+이 저장소의 기존 소스는 `v1`, 2026-10-09 업데이트는 `v2` 태그와 Release로 보존합니다. `main`은 최신 코드를 표시하며 이전 버전은 GitHub의 Releases나 태그에서 내려받을 수 있습니다. 기존 태그를 덮어쓰거나 강제 push하지 않습니다.
+
 ```powershell
 git status --short
 git add .

@@ -33,8 +33,13 @@ def safe_environment():
 def stop_process(process):
     if process.poll() is None:
         if os.name == 'nt':
-            subprocess.run(['taskkill','/PID',str(process.pid),'/T','/F'],capture_output=True,
-                           creationflags=CREATE_HIDDEN,timeout=15)
+            try:
+                stopped=subprocess.run(['taskkill','/PID',str(process.pid),'/T','/F'],capture_output=True,
+                                       creationflags=CREATE_HIDDEN,timeout=5)
+                if stopped.returncode and process.poll() is None:
+                    process.kill()
+            except subprocess.TimeoutExpired:
+                process.kill()
         else:
             process.kill()
         process.wait(timeout=15)
@@ -370,6 +375,13 @@ def main():
         threading.Thread(target=listen,daemon=True).start()
         action=request.get('action')
         root=HERE
+        if action=='list':
+            from trading.history_view import read_history_page
+            account=valid_account(request.get('account') or '')
+            result=read_history_page(root,account,request.get('start_ms'),request.get('end_ms'),
+                                     request.get('symbol',''),request.get('page',1),request.get('view','trades'))
+            emit({'type':'result','action':'list','account':account,**result})
+            return
         if action=='status':
             account=request.get('account')
             try:
